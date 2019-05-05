@@ -5,6 +5,7 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * @author Oscar van Leusen
@@ -62,7 +63,6 @@ public class Participant extends Thread {
 
     @Override
     public void run() {
-        String receivedMessage;
         boolean connectionsMade = false;
         while (running) {
             try {
@@ -88,8 +88,14 @@ public class Participant extends Thread {
                             throw new ParticipantConfigurationException("Participant has same port as another participant: " + participant);
                         }
                     }
+                    //Waits for all of the participants to be connected before proceeding to send votes
+                    while (participantsHigherPort.stream()
+                            .filter(conn -> conn instanceof ParticipantClientConnection)
+                            .map(ParticipantClientConnection.class::cast)
+                            .anyMatch(e -> !e.isConnected())) {
+                        sleep(50);
+                    }
                     connectionsMade = true;
-                    sleep(200);
                 }
 
                 if (roundNumber == 1 && connectionsMade) {
@@ -106,7 +112,7 @@ public class Participant extends Thread {
                     roundNumber++;
                 }
 
-                if (roundNumber > 1 && connectionsMade) {
+                if (roundNumber == 2 && connectionsMade) {
                     for (Thread thread : participantsLowerPort.keySet()) {
                         ParticipantServerConnection conn = (ParticipantServerConnection) thread;
                         conn.sendCombinedVotes();
@@ -116,8 +122,51 @@ public class Participant extends Thread {
                         ParticipantClientConnection conn = (ParticipantClientConnection) thread;
                         conn.sendCombinedVotes();
                     }
+
+                    sleep(500);
                 }
-                receivedMessage = in.readLine();
+
+                roundNumber++;
+
+                System.out.print("OVERALL VOTES: ");
+                for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
+                    System.out.print(vote.getKey() + " " + vote.getValue() + " ");
+                }
+                System.out.println();
+
+                //Establish winning vote
+                Map<String, Integer> votesCount = new HashMap<>();
+                for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
+                    Integer port = vote.getKey();
+                    String option = vote.getValue();
+
+                    //Only counts votes not made by itself
+                    if (port != listenPort) {
+                        int count = votesCount.getOrDefault(option, 0);
+                        votesCount.put(option, count+1);
+                    }
+                }
+                //Adds its own vote
+                int count = votesCount.getOrDefault(chosenVote, 0);
+                votesCount.put(chosenVote, count+1);
+
+                List<String> majorityOptions = new ArrayList<>();
+                int maxVotes=(Collections.max(votesCount.values()));  //Find the maximum vote for any option
+                for (Map.Entry<String, Integer> entry : votesCount.entrySet()) {
+                    if (entry.getValue() == maxVotes) {
+                        majorityOptions.add(entry.getKey());     //Add any option matching the maximum vote to the list
+                    }
+                }
+
+                if (majorityOptions.size() == 1) {
+                    System.out.println("MAJORITY VOTE FOUND: " + majorityOptions.get(0));
+                    out.println("OUTCOME " + majorityOptions.get(0) +  " " + participantVotes.keySet());
+                } else {
+                    System.out.println("NO OVERALL MAJORITY, TIE BETWEEN: " + majorityOptions.toString());
+                    out.println("OUTCOME null " + participantVotes.keySet());
+                }
+
+                running = false; //We're done now, so no further loops are required.
             } catch (IOException e) {
                 e.printStackTrace();
             } catch (ParticipantConfigurationException e) {

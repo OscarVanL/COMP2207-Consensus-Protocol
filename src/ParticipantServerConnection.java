@@ -43,13 +43,18 @@ public class ParticipantServerConnection extends Thread {
                         //Otherwise it's a vote from a later round
                         if (messageParts.length == 3 && participant.getRoundNumber() == 1) {
                             System.out.println("Vote received in round 1: " + receivedMessage);
-                            participant.participantVotes.put(Integer.parseInt(messageParts[1]), messageParts[2]);
+                            synchronized (participant.participantVotes) {
+                                participant.participantVotes.put(Integer.parseInt(messageParts[1]), messageParts[2]);
+                            }
+
                         } else if (participant.getRoundNumber() > 1) {
                             System.out.println("Votes received round " + participant.getRoundNumber() + ": " + receivedMessage);
-                            //for (int i=1; i<messageParts.length; i+=2) {
-                            //    participantVotes.clear();
-                            //
-                            //}
+                            for (int i=1; i<messageParts.length; i+=2) {
+                                synchronized (participant.participantVotes) {
+                                    participant.participantVotes.put(Integer.parseInt(messageParts[i]), messageParts[i+1]);
+                                }
+
+                            }
                         }
 
                 }
@@ -65,8 +70,11 @@ public class ParticipantServerConnection extends Thread {
 
     public void sendCombinedVotes() {
         String voteText = "VOTE ";
-        for (Map.Entry<Integer, String> vote : participant.participantVotes.entrySet()) {
-            voteText += vote.getKey() + " " + vote.getValue() + " ";
+
+        synchronized (participant.participantVotes) {
+            for (Map.Entry<Integer, String> vote : participant.participantVotes.entrySet()) {
+                voteText += vote.getKey() + " " + vote.getValue() + " ";
+            }
         }
 
         System.out.println("Sending Vote: " + voteText);

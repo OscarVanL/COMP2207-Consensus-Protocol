@@ -12,7 +12,6 @@ public class CoordinatorConnHandler extends Thread {
     private PrintWriter out;
     private int participantPort;
     private boolean running; //Whether the thread/connection is running as normal
-    private boolean participantPortReceived = false;
 
     /**
      * A class for managing a Coordinator connection to a participant
@@ -39,8 +38,14 @@ public class CoordinatorConnHandler extends Thread {
                     //Participant telling Coordinator its port number/identifier
                     case "JOIN":
                         participantPort = Integer.parseInt(receivedMessage.replaceAll("[^0-9]", ""));
-                        participantPortReceived = true;
                         coordinator.participantJoined(this);
+                        break;
+                    case "OUTCOME":
+                        System.out.print("Outcome received from participant: " + participantPort + ", option " + messageParts[1] + ", votes from ");
+                        for (int i=2; i<messageParts.length; i++) {
+                            System.out.print(messageParts[i] + " ");
+                        }
+                        System.out.println();
                         break;
                     default:
                         throw new Coordinator.UnknownMessageException(receivedMessage);
