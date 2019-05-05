@@ -27,9 +27,10 @@ public class Participant extends Thread {
     private final failureCondition failureCond;
     private int[] otherParticipants;
     private boolean running; //Whether the thread/connection is running as normal
-    private int roundNumber = 0;
+    private int roundNumber = 1;
     private List<String> voteOptions = new ArrayList<>();
     private String chosenVote; //Randomly chosen vote from this participant
+    protected Map<Integer, String> participantVotes = new HashMap<>();
 
     private Participant(String args[]) throws InsufficientArgumentsException {
         //Bare-minimum number of arguments is 4, <cport> <pport> <timeout> <failurecond>
@@ -88,10 +89,10 @@ public class Participant extends Thread {
                         }
                     }
                     connectionsMade = true;
-                    sleep(100);
+                    sleep(200);
                 }
 
-                if (roundNumber == 0 && connectionsMade) {
+                if (roundNumber == 1 && connectionsMade) {
                     for (Thread thread : participantsLowerPort.keySet()) {
                         ParticipantServerConnection conn = (ParticipantServerConnection) thread;
                         conn.sendVotes(chosenVote);
@@ -100,6 +101,20 @@ public class Participant extends Thread {
                     for (Thread thread : participantsHigherPort) {
                         ParticipantClientConnection conn = (ParticipantClientConnection) thread;
                         conn.sendVotes(chosenVote);
+                    }
+                    sleep(100);
+                    roundNumber++;
+                }
+
+                if (roundNumber > 1 && connectionsMade) {
+                    for (Thread thread : participantsLowerPort.keySet()) {
+                        ParticipantServerConnection conn = (ParticipantServerConnection) thread;
+                        conn.sendCombinedVotes();
+                    }
+
+                    for (Thread thread : participantsHigherPort) {
+                        ParticipantClientConnection conn = (ParticipantClientConnection) thread;
+                        conn.sendCombinedVotes();
                     }
                 }
                 receivedMessage = in.readLine();
@@ -111,6 +126,10 @@ public class Participant extends Thread {
                 e.printStackTrace();
             }
         }
+    }
+
+    public int getRoundNumber() {
+        return this.roundNumber;
     }
 
     private void sendJoin() {

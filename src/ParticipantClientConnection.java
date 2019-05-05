@@ -3,6 +3,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * @author Oscar van Leusen
@@ -41,7 +43,16 @@ public class ParticipantClientConnection extends Thread {
                 String[] messageParts = receivedMessage.split(" ");
                 switch (messageParts[0]) {
                     case "VOTE":
-                        System.out.println("Vote received: " + receivedMessage);
+                        if (messageParts.length == 3 && participant.getRoundNumber() == 1) {
+                            System.out.println("Vote received in round 1: " + receivedMessage);
+                            participant.participantVotes.put(Integer.parseInt(messageParts[1]), messageParts[2]);
+                        } else if (participant.getRoundNumber() > 1) {
+                            System.out.println("Votes received round " + participant.getRoundNumber() + ": " + receivedMessage);
+                            //for (int i=1; i<messageParts.length; i+=2) {
+                            //    participantVotes.clear();
+                            //
+                            //}
+                        }
                 }
             } catch (IOException e) {
                 e.printStackTrace();
@@ -50,7 +61,19 @@ public class ParticipantClientConnection extends Thread {
         }
     }
 
+
     public void sendVotes(String vote) {
         out.println("VOTE " + participant.getPort() + " " + vote);
+    }
+
+    public void sendCombinedVotes() {
+        String voteText = "VOTE ";
+        for (Map.Entry<Integer, String> vote : participant.participantVotes.entrySet()) {
+            voteText += vote.getKey() + " " + vote.getValue() + " ";
+        }
+
+        System.out.println("Sending Vote: " + voteText);
+
+        out.println(voteText);
     }
 }
