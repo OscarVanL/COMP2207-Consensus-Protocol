@@ -6,24 +6,24 @@ import java.util.*;
 /**
  * @author Oscar van Leusen
  */
-public class Coordinator extends Thread {
+public class Coordinator {
     private HashMap<Thread, Socket> participantConnections = new HashMap<>();
-    private int participantPorts[];
+    private List<Integer> participantPorts = new ArrayList<>();
     private int participantsJoined = 0;
 
     private ServerSocket serverSocket;
     private final int listenPort;
-    private final int parts; //Number of participants to expect
+    private int parts; //Number of participants to expect
     private final Set<String> options;
+    private List<String> outcomes = new ArrayList<>();
 
-    private Coordinator(String args[]) throws InsufficientArgumentsException {
+    private Coordinator(String[] args) throws InsufficientArgumentsException {
         //Bare-minimum number of arguments is 4, <port> <parts> <option1> <option2>
         if (args.length < 4) {
             throw new InsufficientArgumentsException(args);
         }
         listenPort = Integer.parseInt(args[0]);
         parts = Integer.parseInt(args[1]);
-        participantPorts = new int[parts];
         options = new HashSet<>();
 
         for (int i=2; i<args.length; i++) {
@@ -36,16 +36,6 @@ public class Coordinator extends Thread {
             System.out.println("Initialised Coordinator listening on " + listenPort + ", expecting " + parts + " participants, options: " + options.toString());
         } catch (IOException e) {
             e.printStackTrace();
-        }
-    }
-
-    /**
-     * Handles operations that would otherwise cause the application to hang
-     */
-    @Override
-    public void run() {
-        while (true) {
-            //does nothing atm
         }
     }
 
@@ -64,6 +54,47 @@ public class Coordinator extends Thread {
         }
         System.out.println("All participants have made a connection to the server");
 
+    }
+
+    public void outcomeReceived(String outcome) {
+        outcomes.add(outcome); //OUTCOME <outcome> [<port>]
+        checkOutcomes();
+    }
+
+    private boolean outcomePrinted = false;
+
+    private void checkOutcomes() {
+        //Wait for outcomes from all connected participants (parts is decremented if a participant connection fails)
+        if (outcomes.size() >= parts && !outcomePrinted) {
+            //If all outcomes are the same, that outcome is conclusive.
+            if (outcomes.stream().allMatch(outcomes.get(0)::equals)) {
+                if (outcomes.get(0).equals("null")) {
+                    System.out.println("Participants could not decide on a majority, there was a tie.");
+                    outcomePrinted = true;
+                } else {
+                    System.out.println("Participants voted for option " + outcomes.get(0));
+                    outcomePrinted = true;
+                }
+                //Close connections to participants as we have conclusive votes
+                participantConnections.keySet().stream()
+                        .map(CoordinatorConnHandler.class::cast)
+                        .forEach(e -> e.closeConnection());
+            } else {
+                System.out.println("Participants did not reach same outcome: " + outcomes.toString());
+            }
+        }
+    }
+
+    /**
+     * Called by a Coordinator thread connected to a participant when a participant fails
+     */
+    protected void participantDisconnected(CoordinatorConnHandler connection) {
+        participantPorts.remove((Integer) connection.getPort());
+        participantsJoined--;
+        parts--;
+        participantConnections.remove(connection);
+
+        checkOutcomes();
     }
 
     private void sendDetailsVoteOptions() {
@@ -85,7 +116,7 @@ public class Coordinator extends Thread {
     }
 
     public void participantJoined(CoordinatorConnHandler participant) {
-        participantPorts[participantsJoined] = participant.getPort();
+        participantPorts.add(participant.getPort());
         participantsJoined++;
 
         if (participantsJoined >= parts) {

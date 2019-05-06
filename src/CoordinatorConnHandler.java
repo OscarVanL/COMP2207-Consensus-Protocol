@@ -1,6 +1,10 @@
 import java.io.*;
 import java.net.Socket;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.util.AbstractMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * @author Oscar van Leusen
@@ -33,29 +37,42 @@ public class CoordinatorConnHandler extends Thread {
         while (running) {
             try {
                 receivedMessage = in.readLine();
-                String[] messageParts = receivedMessage.split(" ");
-                switch (messageParts[0]) {
-                    //Participant telling Coordinator its port number/identifier
-                    case "JOIN":
-                        participantPort = Integer.parseInt(receivedMessage.replaceAll("[^0-9]", ""));
-                        coordinator.participantJoined(this);
-                        break;
-                    case "OUTCOME":
-                        System.out.print("Outcome received from participant: " + participantPort + ", option " + messageParts[1] + ", votes from ");
-                        for (int i=2; i<messageParts.length; i++) {
-                            System.out.print(messageParts[i] + " ");
-                        }
-                        System.out.println();
-                        break;
-                    default:
-                        throw new Coordinator.UnknownMessageException(receivedMessage);
+                if (receivedMessage == null) {
+                    System.err.println("Connection to participant at port " + participantPort + " closed unexpectedly.");
+                    coordinator.participantDisconnected(this);
+                    closeConnection();
+                    running = false;
+                } else {
+                    String[] messageParts = receivedMessage.split(" ");
+                    switch (messageParts[0]) {
+                        //Participant telling Coordinator its port number/identifier
+                        case "JOIN":
+                            participantPort = Integer.parseInt(receivedMessage.replaceAll("[^0-9]", ""));
+                            coordinator.participantJoined(this);
+                            break;
+                        case "OUTCOME":
+                            coordinator.outcomeReceived(messageParts[1]);
+                            break;
+                        default:
+                            throw new Coordinator.UnknownMessageException(receivedMessage);
+                    }
                 }
 
 
-            } catch (IOException e) {
-                e.printStackTrace();
+
+            } catch (SocketTimeoutException e) {
+                this.running = false;
+                System.err.println("Connection to participant at port " + participantPort + " timed out.");
+                coordinator.participantDisconnected(this);
+            } catch (SocketException e) {
+                this.running = false;
+                System.err.println("Connection to participant at port " + participantPort + " closed.");
+                coordinator.participantDisconnected(this);
             } catch (Coordinator.UnknownMessageException e) {
                 System.err.println(e);
+            } catch (IOException e) {
+                running = false;
+                e.printStackTrace();
             }
         }
     }
@@ -64,11 +81,11 @@ public class CoordinatorConnHandler extends Thread {
      * Sends message DETAILS [<port>] to the Participant
      * @param participantPorts
      */
-    public void sendDetails(int participantPorts[]) {
+    public void sendDetails(List<Integer> participantPorts) {
         String message = "DETAILS ";
-        for (int i=0; i<participantPorts.length; i++) {
-            if (participantPorts[i] != participantPort) {
-                message += participantPorts[i] + " ";
+        for (Integer port : participantPorts) {
+            if (port != participantPort) {
+                message += port + " ";
             }
         }
         out.println(message);
@@ -84,5 +101,14 @@ public class CoordinatorConnHandler extends Thread {
 
     public int getPort() {
         return this.participantPort;
+    }
+
+    public void closeConnection() {
+        try {
+            socket.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
     }
 }
