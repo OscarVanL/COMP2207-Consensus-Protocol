@@ -12,8 +12,7 @@ public class Coordinator {
     private int participantsJoined = 0;
 
     private ServerSocket serverSocket;
-    private final int listenPort;
-    private int parts; //Number of participants to expect
+    private int parts; //Number of participants to expect to JOIN (and expect an OUTCOME from)
     private final Set<String> options;
     private List<String> outcomes = new ArrayList<>();
 
@@ -22,13 +21,11 @@ public class Coordinator {
         if (args.length < 4) {
             throw new InsufficientArgumentsException(args);
         }
-        listenPort = Integer.parseInt(args[0]);
+        int listenPort = Integer.parseInt(args[0]);
         parts = Integer.parseInt(args[1]);
         options = new HashSet<>();
 
-        for (int i=2; i<args.length; i++) {
-            options.add(args[i]);
-        }
+        options.addAll(Arrays.asList(args).subList(2, args.length));
 
         try {
             serverSocket = new ServerSocket(listenPort);
@@ -41,7 +38,6 @@ public class Coordinator {
 
     private void awaitConnections() throws IOException {
         Socket socket;
-        long startTime = System.currentTimeMillis();
         while (participantConnections.size() < parts) {
             System.out.println("Waiting for client connection");
             socket = serverSocket.accept();
@@ -56,7 +52,7 @@ public class Coordinator {
 
     }
 
-    public void outcomeReceived(String outcome) {
+    void outcomeReceived(String outcome) {
         outcomes.add(outcome); //OUTCOME <outcome> [<port>]
         checkOutcomes();
     }
@@ -78,7 +74,7 @@ public class Coordinator {
                 //Close connections to participants as we have conclusive votes
                 participantConnections.keySet().stream()
                         .map(CoordinatorConnHandler.class::cast)
-                        .forEach(e -> e.closeConnection());
+                        .forEach(CoordinatorConnHandler::closeConnection);
             } else {
                 System.out.println("Participants did not reach same outcome: " + outcomes.toString());
             }
@@ -88,7 +84,7 @@ public class Coordinator {
     /**
      * Called by a Coordinator thread connected to a participant when a participant fails
      */
-    protected void participantDisconnected(CoordinatorConnHandler connection) {
+    void participantDisconnected(CoordinatorConnHandler connection) {
         participantPorts.remove((Integer) connection.getPort());
         participantsJoined--;
         parts--;
@@ -104,18 +100,18 @@ public class Coordinator {
             participant.sendDetails(participantPorts);
         }
 
-        String voteOptions = "VOTE_OPTIONS ";
+        StringBuilder voteOptions = new StringBuilder("VOTE_OPTIONS ");
         for (String opt : options) {
-            voteOptions += opt + " ";
+            voteOptions.append(opt).append(" ");
         }
         for (Thread thread : participantConnections.keySet()) {
             CoordinatorConnHandler participant = (CoordinatorConnHandler) thread;
-            participant.sendMessage(voteOptions);
+            participant.sendMessage(voteOptions.toString());
         }
 
     }
 
-    public void participantJoined(CoordinatorConnHandler participant) {
+    void participantJoined(CoordinatorConnHandler participant) {
         participantPorts.add(participant.getPort());
         participantsJoined++;
 
@@ -124,13 +120,13 @@ public class Coordinator {
         }
     }
 
-    public static void main(String args[]) {
+    public static void main(String[] args) {
         try {
             Coordinator coordinator = new Coordinator(args);
             //Waits for all participants to connect
             coordinator.awaitConnections();
         } catch (InsufficientArgumentsException e) {
-            System.err.println(e);
+            e.printStackTrace();
         } catch (IOException e) {
             System.err.println("Unable to connect to participants");
             e.printStackTrace();
@@ -138,9 +134,9 @@ public class Coordinator {
     }
 
     static class InsufficientArgumentsException extends Exception {
-        String args[];
+        String[] args;
 
-        public InsufficientArgumentsException (String args[]) {
+        InsufficientArgumentsException(String[] args) {
             this.args = args;
         }
 
@@ -151,7 +147,7 @@ public class Coordinator {
 
     static class UnknownMessageException extends Exception {
         String message;
-        public UnknownMessageException (String message) { this.message = message; }
+        UnknownMessageException(String message) { this.message = message; }
 
         public String toString() { return "Unknown message received from participant: " + message; }
     }

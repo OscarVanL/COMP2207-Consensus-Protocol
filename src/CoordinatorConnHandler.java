@@ -1,10 +1,11 @@
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
-import java.util.AbstractMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * @author Oscar van Leusen
@@ -19,9 +20,9 @@ public class CoordinatorConnHandler extends Thread {
 
     /**
      * A class for managing a Coordinator connection to a participant
-     * @param socket
-     * @param coordinator
-     * @throws IOException
+     * @param socket Socket for connection to participant
+     * @param coordinator Coordinator
+     * @throws IOException Throw exception to Coordinator if socket issue occurs
      */
     CoordinatorConnHandler(Socket socket, Coordinator coordinator) throws IOException {
         this.socket = socket;
@@ -58,8 +59,6 @@ public class CoordinatorConnHandler extends Thread {
                     }
                 }
 
-
-
             } catch (SocketTimeoutException e) {
                 this.running = false;
                 System.err.println("Connection to participant at port " + participantPort + " timed out.");
@@ -69,7 +68,7 @@ public class CoordinatorConnHandler extends Thread {
                 System.err.println("Connection to participant at port " + participantPort + " closed.");
                 coordinator.participantDisconnected(this);
             } catch (Coordinator.UnknownMessageException e) {
-                System.err.println(e);
+                e.printStackTrace();
             } catch (IOException e) {
                 running = false;
                 e.printStackTrace();
@@ -79,13 +78,13 @@ public class CoordinatorConnHandler extends Thread {
 
     /**
      * Sends message DETAILS [<port>] to the Participant
-     * @param participantPorts
+     * @param participantPorts Ports of all participants connected to Coordinator
      */
-    public void sendDetails(List<Integer> participantPorts) {
-        String message = "DETAILS ";
+    void sendDetails(List<Integer> participantPorts) {
+        StringBuilder message = new StringBuilder("DETAILS ");
         for (Integer port : participantPorts) {
             if (port != participantPort) {
-                message += port + " ";
+                message.append(port).append(" ");
             }
         }
         out.println(message);
@@ -95,15 +94,15 @@ public class CoordinatorConnHandler extends Thread {
      * Sends a custom message to the connected Participant
      * @param message Message to send
      */
-    public void sendMessage(String message) {
+    void sendMessage(String message) {
         out.println(message);
     }
 
-    public int getPort() {
+    int getPort() {
         return this.participantPort;
     }
 
-    public void closeConnection() {
+    void closeConnection() {
         try {
             socket.close();
         } catch (IOException e) {

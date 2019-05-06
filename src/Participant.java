@@ -4,9 +4,7 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.SocketException;
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * @author Oscar van Leusen
@@ -23,7 +21,6 @@ public class Participant extends Thread {
     private PrintWriter out;
     private BufferedReader in;
 
-    private final int coordinatorPort;
     private final int listenPort;
     private final int timeout;
     private final failureCondition failureCond;
@@ -35,14 +32,14 @@ public class Participant extends Thread {
     private int votesSharedCount = 0;
     private List<String> voteOptions = new ArrayList<>();
     private String chosenVote; //Randomly chosen vote from this participant
-    protected Map<Integer, String> participantVotes = new HashMap<>();
+    private final Map<Integer, String> participantVotes = new HashMap<>();
 
-    private Participant(String args[]) throws InsufficientArgumentsException {
+    private Participant(String[] args) throws InsufficientArgumentsException {
         //Bare-minimum number of arguments is 4, <cport> <pport> <timeout> <failurecond>
         if (args.length < 4) {
             throw new InsufficientArgumentsException(args);
         }
-        coordinatorPort = Integer.parseInt(args[0]);
+        int coordinatorPort = Integer.parseInt(args[0]);
         listenPort = Integer.parseInt(args[1]);
         timeout = Integer.parseInt(args[2]);
         running = true;
@@ -109,14 +106,16 @@ public class Participant extends Thread {
                 }
 
                 if (roundNumber > 1 && connectionsMade) {
+                    String votes = generateCombinedVotes();
+
                     for (Thread thread : participantsLowerPort.keySet()) {
                         ParticipantServerConnection conn = (ParticipantServerConnection) thread;
-                        conn.sendCombinedVotes();
+                        conn.sendCombinedVotes(votes);
                     }
 
                     for (Thread thread : participantsHigherPort) {
                         ParticipantClientConnection conn = (ParticipantClientConnection) thread;
-                        conn.sendCombinedVotes();
+                        conn.sendCombinedVotes(votes);
                     }
 
                     sleep(500);
@@ -161,10 +160,8 @@ public class Participant extends Thread {
                     throw new ParticipantConfigurationException("Participant has same port as another participant: " + participant);
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | ParticipantConfigurationException e) {
             e.printStackTrace();
-        } catch (ParticipantConfigurationException e) {
-            System.err.println(e);
         }
     }
 
@@ -238,7 +235,7 @@ public class Participant extends Thread {
     /**
      * Called by a connection instance to instigate another vote if a participant connection fails
      */
-    protected void revote() {
+    void revote() {
         System.out.println("Initiating revote");
         participantsHigherPort.stream()
                 .map(ParticipantClientConnection.class::cast)
@@ -249,7 +246,7 @@ public class Participant extends Thread {
         running = true;
     }
 
-    public int getRoundNumber() {
+    private int getRoundNumber() {
         return this.roundNumber;
     }
 
@@ -259,7 +256,7 @@ public class Participant extends Thread {
 
     /**
      * Awaits the DETAILS [<port>] message from the Coordinator and stores other participants ports
-     * @throws IOException
+     * @throws IOException Exception thrown if there is an issue with the socket connection
      */
     private void awaitDetails() throws IOException {
         boolean detailsReceived = false;
@@ -280,6 +277,47 @@ public class Participant extends Thread {
 
     }
 
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    boolean receiveMessage(BufferedReader in) throws IOException {
+        String receivedMessage = in.readLine();
+        if (receivedMessage == null) {
+            System.err.println("Connected participant connection closed unexpectedly");
+            return false;
+        } else {
+            String[] messageParts = receivedMessage.split(" ");
+            if ("VOTE".equals(messageParts[0])) {//If message has 3 parts, eg: VOTE 12345 A, then it is a vote from round 1
+                //Otherwise it's a vote from a later round
+                if (messageParts.length == 3 && getRoundNumber() == 1) {
+                    System.out.println("Vote received in round 1: " + receivedMessage);
+                    synchronized (participantVotes) {
+                        participantVotes.put(Integer.parseInt(messageParts[1]), messageParts[2]);
+                    }
+
+                } else if (getRoundNumber() > 1) {
+                    System.out.println("Votes received round " + getRoundNumber() + ": " + receivedMessage);
+                    for (int i = 1; i < messageParts.length; i += 2) {
+                        synchronized (participantVotes) {
+                            participantVotes.put(Integer.parseInt(messageParts[i]), messageParts[i + 1]);
+                        }
+
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
+    private String generateCombinedVotes() {
+        StringBuilder voteText = new StringBuilder("VOTE ");
+
+        synchronized (participantVotes) {
+            for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
+                voteText.append(vote.getKey()).append(" ").append(vote.getValue()).append(" ");
+            }
+        }
+        return voteText.toString();
+    }
+
     private void awaitOptions() throws IOException {
         boolean optionsReceived = false;
         while (!optionsReceived) {
@@ -287,9 +325,7 @@ public class Participant extends Thread {
             String[] optionsElem = options.split(" ");
             if (optionsElem[0].equals("VOTE_OPTIONS")) {
                 optionsReceived = true;
-                for (int i=1; i<optionsElem.length; i++) {
-                    voteOptions.add(optionsElem[i]);
-                }
+                voteOptions.addAll(Arrays.asList(optionsElem).subList(1, optionsElem.length));
                 System.out.print("Vote Options received: " + voteOptions.toString());
             }
         }
@@ -300,23 +336,25 @@ public class Participant extends Thread {
         System.out.println();
     }
 
-    public int getPort() {
+    int getPort() {
         return this.listenPort;
     }
 
-    public int getTimeout() {
+    int getTimeout() {
         return this.timeout;
     }
 
-    public boolean isMajorityVoteSent() {
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    boolean isMajorityVoteSent() {
         return this.majorityVoteSent;
     }
 
-    public boolean hasFailed() {
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    boolean hasFailed() {
         return this.failed;
     }
 
-    public static void main(String args[]) {
+    public static void main(String[] args) {
         try {
             Participant participant = new Participant(args);
             participant.sendJoin();
@@ -325,17 +363,15 @@ public class Participant extends Thread {
             //Makes connections to other participants
             participant.start();
 
-        } catch (InsufficientArgumentsException e) {
-            System.err.println(e);
-        } catch (IOException e) {
+        } catch (InsufficientArgumentsException | IOException e) {
             e.printStackTrace();
         }
     }
 
     static class InsufficientArgumentsException extends Exception {
-        String args[];
+        String[] args;
 
-        public InsufficientArgumentsException (String args[]) {
+        InsufficientArgumentsException(String[] args) {
             this.args = args;
         }
 
@@ -347,7 +383,7 @@ public class Participant extends Thread {
     static class ParticipantConfigurationException extends Exception {
         String error;
 
-        public ParticipantConfigurationException (String error) {
+        ParticipantConfigurationException(String error) {
             this.error = error;
         }
 
