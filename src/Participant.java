@@ -4,6 +4,7 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.util.*;
 import java.util.concurrent.TimeoutException;
 
@@ -70,7 +71,7 @@ public class Participant extends Thread {
             socket.setSoLinger(true,0);
             out = new PrintWriter(socket.getOutputStream(), true);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            System.out.println("Initialised Participant, listening on port " + listenPort + " with failure condition: " + failureCond);
+            System.out.println("Initialised Participant, listening on " + listenPort + ", failure condition: " + failureCond);
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -82,19 +83,20 @@ public class Participant extends Thread {
             try {
                 if (!connectionsMade) {
                     awaitConnections();
-                }
-
-                //Waits for all of the participants to be connected before proceeding to send votes
-                long startTime = System.currentTimeMillis();
-                while (participantsHigherPort.stream()
-                        .map(ParticipantClientConnection.class::cast)
-                        .anyMatch(e -> !e.isConnected())) {
-                    if (System.currentTimeMillis() - startTime > timeout) {
-                        running = false;
-                        throw new TimeoutException("Other participants did not connect within timeout");
+                    //Waits for all of the participants to be connected before proceeding to send votes
+                    long startTime = System.currentTimeMillis();
+                    while (participantsHigherPort.stream()
+                            .map(ParticipantClientConnection.class::cast)
+                            .anyMatch(e -> !e.isConnected())) {
+                        if (System.currentTimeMillis() - startTime > timeout) {
+                            running = false;
+                            throw new TimeoutException("Other participants did not connect within timeout");
+                        }
                     }
+                    connectionsMade = true;
+                    //Enables participant timeouts now that connections have been established
+                    enableTimeouts();
                 }
-                connectionsMade = true;
 
                 roundVotesReceived = participantVotes.size(); //Resets vote counter before starting any round
 
@@ -158,7 +160,7 @@ public class Participant extends Thread {
                 }
 
                 roundNumber++;
-            } catch (InterruptedException | TimeoutException e) {
+            } catch (InterruptedException | TimeoutException | SocketException e) {
                 e.printStackTrace();
             }
         }
@@ -178,9 +180,8 @@ public class Participant extends Thread {
                     thread.start();
                 } else if (participant < listenPort) {
                     Socket socket = serverSocket.accept();
-                    socket.setSoTimeout(timeout);
                     socket.setSoLinger(true,0);
-                    System.out.println("Participant connected to this participant");
+                    System.out.println("Another participant connected to this participant acting as server " + listenPort);
                     Thread thread = new ParticipantServerConnection(socket, this);
                     participantsLowerPort.put(thread, socket);
                     thread.start();
@@ -190,6 +191,23 @@ public class Participant extends Thread {
             }
         } catch (IOException | ParticipantConfigurationException e) {
             e.printStackTrace();
+        }
+    }
+
+    /**
+     * Enables timeouts only once all participants have connected, otherwise with large numbers of participants we can
+     * find that the first participants to connect will time out before the last ones connect
+     */
+    private void enableTimeouts() throws SocketException {
+        System.out.println("Enabling timeouts for participants as connections have been established");
+        for (Thread connThread : participantsHigherPort) {
+            ParticipantClientConnection conn = (ParticipantClientConnection) connThread;
+            conn.setTimeout();
+        }
+
+        for (Thread connThread : participantsLowerPort.keySet()) {
+            ParticipantServerConnection conn = (ParticipantServerConnection) connThread;
+            conn.setTimeout();
         }
     }
 
@@ -230,59 +248,67 @@ public class Participant extends Thread {
         }
     }
 
+    /**
+     * Determines whether it's ready to send OUTCOME to the Coordinator, and what this outcome is.
+     */
     private void establishWinner() {
-        if (roundVotesReceived >= otherParticipants.length+1 && !revoting && !majorityVoteSent) {
-            System.out.print("OVERALL VOTES: ");
-            for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
-                System.out.print(vote.getKey() + " " + vote.getValue() + " ");
-            }
-            System.out.println();
-
-            //Establish winning vote
-            Map<String, Integer> votesCount = new HashMap<>();
-            for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
-                Integer port = vote.getKey();
-                String option = vote.getValue();
-
-                //Only counts votes not made by itself
-                if (port != listenPort) {
-                    int count = votesCount.getOrDefault(option, 0);
-                    votesCount.put(option, count+1);
+        //Ensures two participant connections don't enter establishWinner() simultaneously and send duplicate votes
+        //to the Coordinator
+        synchronized (this) {
+            if (roundVotesReceived >= otherParticipants.length+1 && !revoting && !majorityVoteSent) {
+                System.out.print("OVERALL VOTES: ");
+                for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
+                    System.out.print(vote.getKey() + " " + vote.getValue() + " ");
                 }
-            }
-            //Adds its own vote
-            int count = votesCount.getOrDefault(chosenVote, 0);
-            votesCount.put(chosenVote, count+1);
+                System.out.println();
 
-            List<String> majorityOptions = new ArrayList<>();
-            int maxVotes=(Collections.max(votesCount.values()));  //Find the maximum vote for any option
-            for (Map.Entry<String, Integer> entry : votesCount.entrySet()) {
-                if (entry.getValue() == maxVotes) {
-                    majorityOptions.add(entry.getKey());     //Add any option matching the maximum vote to the list
+                //Establish winning vote
+                Map<String, Integer> votesCount = new HashMap<>();
+                for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
+                    Integer port = vote.getKey();
+                    String option = vote.getValue();
+
+                    //Only counts votes not made by itself
+                    if (port != listenPort) {
+                        int count = votesCount.getOrDefault(option, 0);
+                        votesCount.put(option, count+1);
+                    }
                 }
-            }
+                //Adds its own vote
+                int count = votesCount.getOrDefault(chosenVote, 0);
+                votesCount.put(chosenVote, count+1);
 
-            try {
-                if (majorityOptions.size() == 1) {
-                    System.out.println("MAJORITY VOTE FOUND: " + majorityOptions.get(0));
-                    out.println("OUTCOME " + majorityOptions.get(0) +  " " + participantVotes.keySet());
-                    majorityVoteSent = true;
-                    running = false; //We're done now, so no further loops are required.
-                    sleep(timeout);
-                    System.exit(0);
-                } else {
-                    System.out.println("NO OVERALL MAJORITY, TIE BETWEEN: " + majorityOptions.toString());
-                    out.println("OUTCOME null " + participantVotes.keySet());
-                    majorityVoteSent = true;
-                    running = false; //We're done now, so no further loops are required.
-                    sleep(timeout);
-                    System.exit(0);
+                List<String> majorityOptions = new ArrayList<>();
+                int maxVotes=(Collections.max(votesCount.values()));  //Find the maximum vote for any option
+                for (Map.Entry<String, Integer> entry : votesCount.entrySet()) {
+                    if (entry.getValue() == maxVotes) {
+                        majorityOptions.add(entry.getKey());     //Add any option matching the maximum vote to the list
+                    }
                 }
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
 
+                try {
+                    if (majorityOptions.size() == 1 && !majorityVoteSent) {
+                        System.out.println("MAJORITY VOTE FOUND: " + majorityOptions.get(0));
+                        out.println("OUTCOME " + majorityOptions.get(0) +  " " + participantVotes.keySet());
+                        majorityVoteSent = true;
+                        running = false; //We're done now, so no further loops are required.
+                        sleep(timeout);
+                        System.exit(0);
+                    } else if (!majorityVoteSent) {
+                        System.out.println("NO OVERALL MAJORITY, TIE BETWEEN: " + majorityOptions.toString());
+                        out.println("OUTCOME null " + participantVotes.keySet());
+                        majorityVoteSent = true;
+                        running = false; //We're done now, so no further loops are required.
+                        sleep(timeout);
+                        System.exit(0);
+                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+
+            }
         }
+
     }
 
     /**
@@ -339,7 +365,7 @@ public class Participant extends Thread {
                 for (int i=1; i<detailsElem.length; i++) {
                     otherParticipants[i-1] = Integer.parseInt(detailsElem[i]);
                 }
-                System.out.println("Other participants received: " + Arrays.toString(otherParticipants));
+                System.out.println("Other participants: " + Arrays.toString(otherParticipants));
             } else {
                 System.err.println("Message received in awaitDetails() that was not 'DETAILS': " + detailsElem[0]);
             }
@@ -405,13 +431,13 @@ public class Participant extends Thread {
             if (optionsElem[0].equals("VOTE_OPTIONS")) {
                 optionsReceived = true;
                 voteOptions.addAll(Arrays.asList(optionsElem).subList(1, optionsElem.length));
-                System.out.print("Vote Options received: " + voteOptions.toString());
+                System.out.print("Vote Options: " + voteOptions.toString());
             }
         }
         //Picks a random vote
         Collections.shuffle(voteOptions);
         chosenVote = voteOptions.get(0);
-        System.out.print(", selected option: " + chosenVote);
+        System.out.print(", selected: " + chosenVote);
         System.out.println();
     }
 

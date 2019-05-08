@@ -29,7 +29,6 @@ public class Coordinator {
 
         try {
             serverSocket = new ServerSocket(listenPort);
-            serverSocket.setSoTimeout(10000); //Gives 10 seconds maximum for each participant to join before timing out.
             System.out.println("Initialised Coordinator listening on " + listenPort + ", expecting " + parts + " participants, options: " + options.toString());
         } catch (IOException e) {
             e.printStackTrace();
@@ -39,17 +38,16 @@ public class Coordinator {
     private void awaitConnections() throws IOException {
         Socket socket;
         while (participantConnections.size() < parts) {
-            System.out.println("Waiting for client connection");
             socket = serverSocket.accept();
             socket.setSoLinger(true,0);
-            System.out.println("A participant has connected to the server");
+            System.out.println("A participant has connected to the coordinator");
 
             //Creates a new thread for the participant, so this thread is able to continue to accept new connections.
             Thread thread = new CoordinatorConnHandler(socket, this);
             participantConnections.put(thread, socket);
             thread.start();
         }
-        System.out.println("All participants have made a connection to the server");
+        System.out.println("All participants have made a connection to the coordinator");
 
     }
 

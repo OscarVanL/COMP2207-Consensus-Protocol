@@ -26,12 +26,11 @@ public class ParticipantClientConnection extends Thread {
 
         try {
             socket = new Socket("localhost", participantServerPort);
-            socket.setSoTimeout(participant.getTimeout());
             socket.setSoLinger(true,0);
             out = new PrintWriter(socket.getOutputStream(), true);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             serverConn = true;
-            System.out.println("Participant connected to participant listening at: " + participantServerPort);
+            System.out.println("Client participant " + participant.getPort() + " connected to Server participant: " + participantServerPort);
         } catch (IOException e) {
             running = false;
             e.printStackTrace();
@@ -91,6 +90,10 @@ public class ParticipantClientConnection extends Thread {
 
     boolean isConnected() {
         return this.serverConn;
+    }
+
+    void setTimeout() throws SocketException {
+        this.socket.setSoTimeout(participant.getTimeout());
     }
 
     /**

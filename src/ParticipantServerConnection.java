@@ -79,6 +79,10 @@ public class ParticipantServerConnection extends Thread {
         }
     }
 
+    void setTimeout() throws SocketException {
+        this.socket.setSoTimeout(participant.getTimeout());
+    }
+
     /**
      * Used to simulate a participant failing
      */
