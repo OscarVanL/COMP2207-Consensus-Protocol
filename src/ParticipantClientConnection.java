@@ -42,26 +42,25 @@ public class ParticipantClientConnection extends Thread {
         while (running && serverConn) {
             //Waits for a message from the Server
             try {
-                if (!participant.receiveMessage(in)) {
+                if (!participant.receiveMessage(in.readLine())) {
                     closeConnection();
                 }
             } catch (SocketTimeoutException e) {
                 System.err.println("Connection to other Participant at port " + participantServerPort + " timed out.");
-                this.serverConn = false;
+                closeConnection();
                 if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
                     System.out.println("A connected participant failed before OUTCOME was sent. Revoting.");
-                    participant.revote();
+                    participant.revote(Participant.revoteReason.FAILURE);
                 }
-                this.running = false;
             } catch (SocketException e) {
                 System.err.println("Connection to other Participant at port " + participantServerPort + " closed.");
-                this.serverConn = false;
+                closeConnection();
                 if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
                     System.out.println("A connected participant failed before OUTCOME was sent. Revoting.");
-                    participant.revote();
+                    participant.revote(Participant.revoteReason.FAILURE);
                 }
-                this.running = false;
             } catch (IOException e) {
+                closeConnection();
                 running = false;
                 e.printStackTrace();
             }
@@ -71,13 +70,14 @@ public class ParticipantClientConnection extends Thread {
 
     void sendVotes(String vote) {
         if (serverConn) {
-            System.out.println("Sending: VOTE " + participant.getPort() + " " + vote);
+            System.out.println("Sending to " + participantServerPort + ": VOTE " + participant.getPort() + " " + vote);
             out.println("VOTE " + participant.getPort() + " " + vote);
         }
     }
 
     void sendCombinedVotes(String votes) {
         if (serverConn) {
+            System.out.println("Sending to " + participantServerPort + ": "  + votes);
             out.println(votes);
         }
     }
@@ -95,11 +95,17 @@ public class ParticipantClientConnection extends Thread {
     /**
      * Used to simulate a participant failing
      */
-    void closeConnection() throws IOException {
+    void closeConnection() {
+        participant.connectionLost(this);
         serverConn = false;
         running = false;
-        socket.close();
-        in.close();
-        out.close();
+        try {
+            socket.close();
+            in.close();
+            out.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
     }
 }

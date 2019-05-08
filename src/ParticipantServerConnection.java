@@ -35,27 +35,25 @@ public class ParticipantServerConnection extends Thread {
     public void run() {
         while (running) {
             try {
-                if (!participant.receiveMessage(in)) {
+                if (!participant.receiveMessage(in.readLine())) {
                     closeConnection();
                 }
             } catch (SocketTimeoutException e) {
                 System.err.println("Connection to other Participant timed out.");
-                this.connectionLost = true;
-                this.running = false;
+                closeConnection();
                 if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
-                    System.out.println("A connected participant failed before OUTCOME was sent. Revoting.");
-                    participant.revote();
+                    System.out.println("A connected participant failed before OUTCOME was sent. Triggering revote.");
+                    participant.revote(Participant.revoteReason.FAILURE);
                 }
             } catch (SocketException e) {
                 System.err.println("Connection to other Participant closed");
-                this.connectionLost = true;
-                this.running = false;
+                closeConnection();
                 if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
-                    System.out.println("A connected participant failed before OUTCOME was sent. Revoting.");
-                    participant.revote();
+                    System.out.println("A connected participant failed before OUTCOME was sent. Triggering revote.");
+                    participant.revote(Participant.revoteReason.FAILURE);
                 }
             } catch (IOException e) {
-                running = false;
+                closeConnection();
                 e.printStackTrace();
             }
         }
@@ -70,6 +68,7 @@ public class ParticipantServerConnection extends Thread {
 
     void sendCombinedVotes(String votes) {
         if (!connectionLost) {
+            System.out.println("Sending: " + votes);
             out.println(votes);
         }
     }
@@ -83,11 +82,16 @@ public class ParticipantServerConnection extends Thread {
     /**
      * Used to simulate a participant failing
      */
-    void closeConnection() throws IOException {
+    void closeConnection() {
+        participant.connectionLost(this);
         connectionLost = true;
         running = false;
-        socket.close();
-        in.close();
-        out.close();
+        try {
+            socket.close();
+            in.close();
+            out.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }

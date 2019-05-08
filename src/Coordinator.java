@@ -62,14 +62,17 @@ public class Coordinator {
     private void checkOutcomes() {
         //Wait for outcomes from all connected participants (parts is decremented if a participant connection fails)
         if (outcomes.size() >= parts && !outcomePrinted) {
+            System.out.println("Received majority votes from " + outcomes.size() + " participants, out of " + parts + " functional participants.");
             //If all outcomes are the same, that outcome is conclusive.
             if (outcomes.stream().allMatch(outcomes.get(0)::equals)) {
                 if (outcomes.get(0).equals("null")) {
                     System.out.println("Participants could not decide on a majority, there was a tie.");
                     outcomePrinted = true;
+                    System.exit(0);
                 } else {
                     System.out.println("Participants voted for option " + outcomes.get(0));
                     outcomePrinted = true;
+                    System.exit(0);
                 }
                 //Close connections to participants as we have conclusive votes
                 participantConnections.keySet().stream()
