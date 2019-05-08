@@ -27,6 +27,7 @@ public class ParticipantClientConnection extends Thread {
         try {
             socket = new Socket("localhost", participantServerPort);
             socket.setSoTimeout(participant.getTimeout());
+            socket.setSoLinger(true,0);
             out = new PrintWriter(socket.getOutputStream(), true);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             serverConn = true;

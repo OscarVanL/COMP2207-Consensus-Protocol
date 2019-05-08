@@ -41,6 +41,7 @@ public class Coordinator {
         while (participantConnections.size() < parts) {
             System.out.println("Waiting for client connection");
             socket = serverSocket.accept();
+            socket.setSoLinger(true,0);
             System.out.println("A participant has connected to the server");
 
             //Creates a new thread for the participant, so this thread is able to continue to accept new connections.

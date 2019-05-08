@@ -67,6 +67,7 @@ public class Participant extends Thread {
 
         try {
             socket = new Socket("localhost", coordinatorPort);
+            socket.setSoLinger(true,0);
             out = new PrintWriter(socket.getOutputStream(), true);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             System.out.println("Initialised Participant, listening on port " + listenPort + " with failure condition: " + failureCond);
@@ -178,6 +179,7 @@ public class Participant extends Thread {
                 } else if (participant < listenPort) {
                     Socket socket = serverSocket.accept();
                     socket.setSoTimeout(timeout);
+                    socket.setSoLinger(true,0);
                     System.out.println("Participant connected to this participant");
                     Thread thread = new ParticipantServerConnection(socket, this);
                     participantsLowerPort.put(thread, socket);
