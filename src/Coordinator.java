@@ -3,11 +3,13 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.*;
 
+import static java.lang.Thread.sleep;
+
 /**
  * @author Oscar van Leusen
  */
 public class Coordinator {
-    private HashMap<Thread, Socket> participantConnections = new HashMap<>();
+    private final HashMap<Thread, Socket> participantConnections = new HashMap<>();
     private List<Integer> participantPorts = new ArrayList<>();
     private int participantsJoined = 0;
 
@@ -44,7 +46,10 @@ public class Coordinator {
 
             //Creates a new thread for the participant, so this thread is able to continue to accept new connections.
             Thread thread = new CoordinatorConnHandler(socket, this);
-            participantConnections.put(thread, socket);
+            synchronized (participantConnections) {
+                participantConnections.put(thread, socket);
+            }
+
             thread.start();
         }
         System.out.println("All participants have made a connection to the coordinator");
@@ -65,18 +70,33 @@ public class Coordinator {
             //If all outcomes are the same, that outcome is conclusive.
             if (outcomes.stream().allMatch(outcomes.get(0)::equals)) {
                 if (outcomes.get(0).equals("null")) {
-                    System.out.println("Participants could not decide on a majority, there was a tie.");
-                    outcomePrinted = true;
-                    System.exit(0);
+                    System.out.println("Participants could not decide on a majority or there was a tie.");
+                    //Restart voting for connected participants with tie values
+                    try {
+                        sleep(2000);
+                        synchronized (participantConnections) {
+                            participantConnections.keySet().stream()
+                                    .map(CoordinatorConnHandler.class::cast)
+                                    .forEach(e -> e.sendMessage("RESTART"));
+                        }
+                        outcomes.clear();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+
+
                 } else {
                     System.out.println("Participants voted for option " + outcomes.get(0));
                     outcomePrinted = true;
+                    //Close connections to participants as we have conclusive votes
+                    synchronized (participantConnections) {
+                        participantConnections.keySet().stream()
+                                .map(CoordinatorConnHandler.class::cast)
+                                .forEach(CoordinatorConnHandler::closeConnection);
+                    }
                     System.exit(0);
                 }
-                //Close connections to participants as we have conclusive votes
-                participantConnections.keySet().stream()
-                        .map(CoordinatorConnHandler.class::cast)
-                        .forEach(CoordinatorConnHandler::closeConnection);
+
             } else {
                 System.out.println("Participants did not reach same outcome: " + outcomes.toString());
             }
@@ -90,27 +110,31 @@ public class Coordinator {
         participantPorts.remove((Integer) connection.getPort());
         participantsJoined--;
         parts--;
-        participantConnections.remove(connection);
+        //Don't remove a connection while something else is referencing it
+        synchronized (participantConnections) {
+            participantConnections.remove(connection);
+        }
+
 
         checkOutcomes();
     }
 
     private void sendDetailsVoteOptions() {
+        synchronized (participantConnections) {
+            for (Thread thread : participantConnections.keySet()) {
+                CoordinatorConnHandler participant = (CoordinatorConnHandler) thread;
+                participant.sendDetails(participantPorts);
+            }
 
-        for (Thread thread : participantConnections.keySet()) {
-            CoordinatorConnHandler participant = (CoordinatorConnHandler) thread;
-            participant.sendDetails(participantPorts);
+            StringBuilder voteOptions = new StringBuilder("VOTE_OPTIONS ");
+            for (String opt : options) {
+                voteOptions.append(opt).append(" ");
+            }
+            for (Thread thread : participantConnections.keySet()) {
+                CoordinatorConnHandler participant = (CoordinatorConnHandler) thread;
+                participant.sendMessage(voteOptions.toString());
+            }
         }
-
-        StringBuilder voteOptions = new StringBuilder("VOTE_OPTIONS ");
-        for (String opt : options) {
-            voteOptions.append(opt).append(" ");
-        }
-        for (Thread thread : participantConnections.keySet()) {
-            CoordinatorConnHandler participant = (CoordinatorConnHandler) thread;
-            participant.sendMessage(voteOptions.toString());
-        }
-
     }
 
     void participantJoined(CoordinatorConnHandler participant) {

@@ -35,7 +35,7 @@ public class ParticipantServerConnection extends Thread {
     public void run() {
         while (running) {
             try {
-                if (!participant.receiveMessage(in.readLine())) {
+                if (!participant.receiveMessage(in.readLine(), null)) {
                     closeConnection();
                 }
             } catch (SocketTimeoutException e) {
@@ -55,32 +55,30 @@ public class ParticipantServerConnection extends Thread {
             } catch (IOException e) {
                 closeConnection();
                 e.printStackTrace();
+            } catch (Coordinator.UnknownMessageException e) {
+                e.printStackTrace();
             }
         }
     }
 
     void sendVotes(String vote) {
-        if (!connectionLost) {
+        if (!connectionLost && !participant.isMajorityVoteSent()) {
             System.out.println("Sending: VOTE " + participant.getPort() + " " + vote);
             out.println("VOTE " + participant.getPort() + " " + vote);
         }
     }
 
     void sendCombinedVotes(String votes) {
-        if (!connectionLost) {
+        if (!connectionLost && !participant.isMajorityVoteSent()) {
             System.out.println("Sending: " + votes);
             out.println(votes);
         }
     }
 
-    void revote() {
-        if (!connectionLost) {
-            this.running = true;
-        }
-    }
-
     void setTimeout() throws SocketException {
-        this.socket.setSoTimeout(participant.getTimeout());
+        if (!connectionLost) {
+            this.socket.setSoTimeout(participant.getTimeout());
+        }
     }
 
     /**

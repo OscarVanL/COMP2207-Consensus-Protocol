@@ -42,7 +42,7 @@ public class ParticipantClientConnection extends Thread {
         while (running && serverConn) {
             //Waits for a message from the Server
             try {
-                if (!participant.receiveMessage(in.readLine())) {
+                if (!participant.receiveMessage(in.readLine(), participantServerPort)) {
                     closeConnection();
                 }
             } catch (SocketTimeoutException e) {
@@ -63,6 +63,8 @@ public class ParticipantClientConnection extends Thread {
                 closeConnection();
                 running = false;
                 e.printStackTrace();
+            } catch (Coordinator.UnknownMessageException e) {
+                e.printStackTrace();
             }
         }
     }
@@ -79,12 +81,6 @@ public class ParticipantClientConnection extends Thread {
         if (serverConn) {
             System.out.println("Sending to " + participantServerPort + ": "  + votes);
             out.println(votes);
-        }
-    }
-
-    void revote() {
-        if (serverConn) {
-            this.running = true;
         }
     }
 

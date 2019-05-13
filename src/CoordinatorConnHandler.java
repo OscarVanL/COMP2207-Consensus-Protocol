@@ -26,6 +26,7 @@ public class CoordinatorConnHandler extends Thread {
      */
     CoordinatorConnHandler(Socket socket, Coordinator coordinator) throws IOException {
         this.socket = socket;
+        socket.setSoLinger(true,0);
         this.coordinator = coordinator;
         this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
         this.out = new PrintWriter(socket.getOutputStream(), true);

@@ -17,8 +17,8 @@ public class Participant extends Thread {
     enum failureCondition { SUCCESS, DURING, AFTER }
     enum revoteReason { FAILURE, INCOMPLETE }
 
-    private List<Thread> participantsHigherPort = new ArrayList<>(); //Stores each connection to a participant on a higher port
-    private HashMap<Thread, Socket> participantsLowerPort = new HashMap<>(); //Stores each connection to a participant on a lower port
+    private List<Thread> participantsHigherPort = new ArrayList<>(); //Stores each connection to a participant on a higher port (ParticipantClientConnection)
+    private HashMap<Thread, Socket> participantsLowerPort = new HashMap<>(); //Stores each connection to a participant on a lower port (ParticipantServerConnection)
     private boolean connectionsMade = false;
     private Socket socket;
     private PrintWriter out;
@@ -27,19 +27,21 @@ public class Participant extends Thread {
     private final int listenPort;
     private final int timeout;
     private final failureCondition failureCond;
-    private int[] otherParticipants;
+    private List<Integer> otherParticipants;
 
     private boolean failed = false;
     private boolean running; //Whether the thread/connection is running as normal
     private int roundNumber = 1;
-    private int participantsFailed = 0;
+    private int votesRequired = 0;
+    private int participantsConnected = 0;
+    private boolean hasSharedVote = false;
     private boolean majorityVoteSent = false;
     private boolean revoting = false;
     private int votesSharedCount = 0;
     private List<String> voteOptions = new ArrayList<>();
     private String chosenVote; //Randomly chosen vote from this participant
-    private int roundVotesReceived = 0; //Number of votes received this voting round
     private final Map<Integer, String> participantVotes = new HashMap<>();
+    private List<String> majorityOptions = new ArrayList<>(); //Participant votes with majority of votes (including ties), used during a RESTART round
 
     private Participant(String[] args) throws InsufficientArgumentsException {
         //Bare-minimum number of arguments is 4, <cport> <pport> <timeout> <failurecond>
@@ -98,8 +100,6 @@ public class Participant extends Thread {
                     enableTimeouts();
                 }
 
-                roundVotesReceived = participantVotes.size(); //Resets vote counter before starting any round
-
                 //Send round 1 votes
                 if (roundNumber == 1) {
                     for (Thread thread : participantsLowerPort.keySet()) {
@@ -110,7 +110,6 @@ public class Participant extends Thread {
                         if (votesSharedCount >= 1 && failureCond == failureCondition.DURING) {
                             System.out.println("INITIATING FAILURE CONDITION 1");
                             closeConnections();
-                            failed = true;
                         }
                     }
 
@@ -122,14 +121,14 @@ public class Participant extends Thread {
                         if (votesSharedCount >= 1 && failureCond == failureCondition.DURING) {
                             System.out.println("INITIATING FAILURE CONDITION 1");
                             closeConnections();
-                            failed = true;
                         }
                     }
+                    hasSharedVote = true;
                     sleep(100);
                 }
 
                 //Send Round n>1 votes
-                if (roundNumber > 1 && running) {
+                if (roundNumber > 1 && !majorityVoteSent) {
                     System.out.println("RUNNING VOTE ROUND " + roundNumber);
                     String votes = generateCombinedVotes();
 
@@ -143,23 +142,15 @@ public class Participant extends Thread {
                         conn.sendCombinedVotes(votes);
                     }
                     revoting = false; //If the loop has come back to here, then this *is* the revote loop.
-                    sleep(500);
-
-                }
-
-                //If failure condition 2, fail here
-                if (failureCond == failureCondition.AFTER) {
-                    System.out.println("INITIATING FAILURE CONDITION 2");
-                    closeConnections();
-                    failed = true;
+                    hasSharedVote = true;
                     sleep(500);
                 }
 
-                if (participantVotes.size() >= (otherParticipants.length+1) && running && !revoting) {
-                    establishWinner();
-                }
+                establishWinner();
 
-                roundNumber++;
+                if (!majorityVoteSent) {
+                    roundNumber++;
+                }
             } catch (InterruptedException | TimeoutException | SocketException e) {
                 e.printStackTrace();
             }
@@ -188,6 +179,8 @@ public class Participant extends Thread {
                 } else {
                     throw new ParticipantConfigurationException("Participant has same port as another participant: " + participant);
                 }
+                participantsConnected = participantsHigherPort.size() + participantsLowerPort.size();
+                votesRequired = participantsConnected + 1;
             }
         } catch (IOException | ParticipantConfigurationException e) {
             e.printStackTrace();
@@ -216,6 +209,7 @@ public class Participant extends Thread {
      */
     private void closeConnections() {
         running = false;
+        failed = true;
         try {
             for (Thread thread : participantsLowerPort.keySet()) {
                 ParticipantServerConnection conn = (ParticipantServerConnection) thread;
@@ -232,6 +226,8 @@ public class Participant extends Thread {
         } catch (IOException e) {
             e.printStackTrace();
         }
+
+        System.exit(1);
     }
 
     /**
@@ -246,6 +242,7 @@ public class Participant extends Thread {
         } else {
             System.err.println("connectionLost() called for non-valid object.");
         }
+        participantsConnected = participantsHigherPort.size() + participantsLowerPort.size();
     }
 
     /**
@@ -255,7 +252,14 @@ public class Participant extends Thread {
         //Ensures two participant connections don't enter establishWinner() simultaneously and send duplicate votes
         //to the Coordinator
         synchronized (this) {
-            if (roundVotesReceived >= otherParticipants.length+1 && !revoting && !majorityVoteSent) {
+            if (participantVotes.size() >= votesRequired && !revoting && !majorityVoteSent && hasSharedVote) {
+                //If failure condition 2 is set, fail here to ensure step 5 does not complete
+                if (failureCond == failureCondition.AFTER) {
+                    System.out.println("INITIATING FAILURE CONDITION 2");
+                    closeConnections();
+                    System.exit(1);
+                }
+
                 System.out.print("OVERALL VOTES: ");
                 for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
                     System.out.print(vote.getKey() + " " + vote.getValue() + " ");
@@ -271,38 +275,50 @@ public class Participant extends Thread {
                     //Only counts votes not made by itself
                     if (port != listenPort) {
                         int count = votesCount.getOrDefault(option, 0);
-                        votesCount.put(option, count+1);
+                        votesCount.put(option, count + 1);
                     }
                 }
                 //Adds its own vote
                 int count = votesCount.getOrDefault(chosenVote, 0);
-                votesCount.put(chosenVote, count+1);
+                votesCount.put(chosenVote, count + 1);
 
-                List<String> majorityOptions = new ArrayList<>();
-                int maxVotes=(Collections.max(votesCount.values()));  //Find the maximum vote for any option
+                int maxVotes = (Collections.max(votesCount.values()));  //Find the maximum vote for any option
+                boolean isMajorityVote = false;
+                //Ensures we have a majority vote
+                if (maxVotes * 2 > participantVotes.size()) {
+                    isMajorityVote = true;
+                }
                 for (Map.Entry<String, Integer> entry : votesCount.entrySet()) {
                     if (entry.getValue() == maxVotes) {
-                        majorityOptions.add(entry.getKey());     //Add any option matching the maximum vote to the list
+                        majorityOptions.add(entry.getKey());     //Add any option matching the maximum vote to the list (this will result in either 1 outcome, or tied outcomes)
                     }
                 }
 
                 try {
-                    if (majorityOptions.size() == 1 && !majorityVoteSent) {
-                        System.out.println("MAJORITY VOTE FOUND: " + majorityOptions.get(0));
-                        out.println("OUTCOME " + majorityOptions.get(0) +  " " + participantVotes.keySet());
+                    if (majorityOptions.size() == 1 && !majorityVoteSent && isMajorityVote) {
                         majorityVoteSent = true;
                         running = false; //We're done now, so no further loops are required.
-                        sleep(timeout);
+                        System.out.println("MAJORITY VOTE FOUND: " + majorityOptions.get(0));
+                        out.println("OUTCOME " + majorityOptions.get(0) + " " + participantVotes.keySet());
+                        //As a majority was found, we can stop now.
+                        sleep(1500);
                         System.exit(0);
                     } else if (!majorityVoteSent) {
-                        System.out.println("NO OVERALL MAJORITY, TIE BETWEEN: " + majorityOptions.toString());
-                        out.println("OUTCOME null " + participantVotes.keySet());
                         majorityVoteSent = true;
-                        running = false; //We're done now, so no further loops are required.
-                        sleep(timeout);
-                        System.exit(0);
+                        if (majorityOptions.size() > 1) {
+                            System.out.println("TIE BETWEEN: " + majorityOptions.toString());
+                        } else {
+                            System.out.println("NO OVERALL MAJORITY AMONG OPTIONS: " + votesCount.keySet().toString());
+                            //RESTART will use any options voted for in this round
+                            majorityOptions.clear();
+                            majorityOptions.addAll(votesCount.keySet());
+                        }
+                        System.out.println("NO OVERALL MAJORITY OR TIE BETWEEN: " + majorityOptions.toString());
+                        out.println("OUTCOME null " + participantVotes.keySet());
+                        awaitRestart();
+                        //We didn't reach a majority, so participant continues to run awaiting further instructions from Coordinator
                     }
-                } catch (InterruptedException e) {
+                } catch (IOException | InterruptedException e) {
                     e.printStackTrace();
                 }
 
@@ -316,33 +332,15 @@ public class Participant extends Thread {
      */
     void revote(revoteReason reason) {
         if (reason == revoteReason.FAILURE && !failed) {
-            if (participantsFailed == 0) {
-                participantsFailed++;
-                System.out.println("Initiating revote (Participant failure)");
+            if (participantVotes.size() < votesRequired) {
+                System.out.println("Initiating revote (Participant failure before all votes propagated)");
                 revoting = true;
-                participantsHigherPort.stream()
-                        .map(ParticipantClientConnection.class::cast)
-                        .forEach(ParticipantClientConnection::revote);
-                participantsLowerPort.keySet().stream()
-                        .map(ParticipantServerConnection.class::cast)
-                        .forEach(ParticipantServerConnection::revote);
-                running = true;
-            } else {
-                //If multiple participants have failed, we fail too as the system is only designed to allow for 1 failure
-                closeConnections();
-                System.exit(1);
             }
         } else if (reason == revoteReason.INCOMPLETE && !failed) {
             // This is required to handle the scenario where a vote was received from another participant that was not
             // complete. It ensures another round of votes happen to ensure complete sets of votes propagate fully
             revoting = true;
             System.out.println("Flagging revote (A participant has incomplete votes)");
-            participantsHigherPort.stream()
-                    .map(ParticipantClientConnection.class::cast)
-                    .forEach(ParticipantClientConnection::revote);
-            participantsLowerPort.keySet().stream()
-                    .map(ParticipantServerConnection.class::cast)
-                    .forEach(ParticipantServerConnection::revote);
         }
     }
 
@@ -361,66 +359,15 @@ public class Participant extends Thread {
             String[] detailsElem = details.split(" ");
             if (detailsElem[0].equals("DETAILS")) {
                 detailsReceived = true;
-                otherParticipants = new int[detailsElem.length-1];
+                otherParticipants = new ArrayList<>();
                 for (int i=1; i<detailsElem.length; i++) {
-                    otherParticipants[i-1] = Integer.parseInt(detailsElem[i]);
+                    otherParticipants.add(Integer.parseInt(detailsElem[i]));
                 }
-                System.out.println("Other participants: " + Arrays.toString(otherParticipants));
+                System.out.println("Other participants: " + otherParticipants.toString());
             } else {
                 System.err.println("Message received in awaitDetails() that was not 'DETAILS': " + detailsElem[0]);
             }
         }
-
-    }
-
-    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
-    boolean receiveMessage(String receivedMessage) {
-        if (receivedMessage == null) {
-            System.err.println("Connected participant connection closed unexpectedly");
-            revote(Participant.revoteReason.FAILURE);
-            return false;
-        } else {
-            String[] messageParts = receivedMessage.split(" ");
-            if ("VOTE".equals(messageParts[0])) {//If message has 3 parts, eg: VOTE 12345 A, then it is a vote from round 1
-                //Otherwise it's a vote from a later round
-                if (messageParts.length == 3 && roundNumber == 1) {
-                    System.out.println("Vote received in round 1: " + receivedMessage);
-                    roundVotesReceived++;
-                    synchronized (participantVotes) {
-                        participantVotes.put(Integer.parseInt(messageParts[1]), messageParts[2]);
-                    }
-
-                } else if (roundNumber > 1) {
-                    if (messageParts.length < (otherParticipants.length+1)*2 + 1) {
-                        revote(revoteReason.INCOMPLETE);
-                    }
-                    System.out.println("Vote received in round " + roundNumber + " : " + receivedMessage);
-                    for (int i = 1; i < messageParts.length; i += 2) {
-                        roundVotesReceived++;
-                        synchronized (participantVotes) {
-                            participantVotes.put(Integer.parseInt(messageParts[i]), messageParts[i + 1]);
-                        }
-                    }
-                }
-
-                if (participantVotes.size() >= (otherParticipants.length+1) && running && !revoting) {
-                    establishWinner();
-                }
-
-            }
-            return true;
-        }
-    }
-
-    private String generateCombinedVotes() {
-        StringBuilder voteText = new StringBuilder("VOTE ");
-
-        synchronized (participantVotes) {
-            for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
-                voteText.append(vote.getKey()).append(" ").append(vote.getValue()).append(" ");
-            }
-        }
-        return voteText.toString();
     }
 
     private void awaitOptions() throws IOException {
@@ -437,9 +384,76 @@ public class Participant extends Thread {
         //Picks a random vote
         Collections.shuffle(voteOptions);
         chosenVote = voteOptions.get(0);
+        participantVotes.put(listenPort, chosenVote);
         System.out.print(", selected: " + chosenVote);
         System.out.println();
     }
+
+    private void awaitRestart() throws IOException {
+        String message = in.readLine();
+        if (message.equals("RESTART")) {
+            System.out.println("Restarting with previous tied/non-majority options: " + majorityOptions.toString());
+            Collections.shuffle(majorityOptions);
+            chosenVote = majorityOptions.get(0);
+            majorityVoteSent = false;
+            hasSharedVote = false;
+            majorityOptions.clear();
+            participantVotes.clear();
+            participantVotes.put(listenPort, chosenVote);
+            votesRequired = participantsConnected; //If we're doing a restart, we can't expect a failed participant's vote to propagate (as we did before).
+            roundNumber = 1;
+            System.out.println("Selected random option: " + chosenVote);
+        }
+    }
+
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    boolean receiveMessage(String receivedMessage, Integer port) throws Coordinator.UnknownMessageException {
+        if (receivedMessage == null) {
+            System.err.println("Connected participant connection closed unexpectedly");
+            revote(Participant.revoteReason.FAILURE);
+            return false;
+        } else {
+            String[] messageParts = receivedMessage.split(" ");
+            if (messageParts[0].equals("VOTE")) {//If message has 3 parts, eg: VOTE 12345 A, then it is a vote from round 1
+                //Otherwise it's a vote from a later round
+                synchronized (participantVotes) {
+                    if (port != null) {
+                        System.out.println("Vote received in round " + roundNumber + ": " + receivedMessage + " from port " + port);
+                    } else {
+                        System.out.println("Vote received in round " + roundNumber + ": " + receivedMessage);
+                    }
+
+                    //If we receive a vote that doesn't have the vote of every participant, we need another round of voting.
+                    if (roundNumber > 1 && messageParts.length < (votesRequired) * 2 + 1) {
+                        revote(revoteReason.INCOMPLETE);
+                    }
+
+                    for (int i=1; i<messageParts.length; i += 2) {
+                        participantVotes.put(Integer.parseInt(messageParts[i]), messageParts[i + 1]);
+                    }
+                }
+
+                establishWinner();
+            } else {
+                throw new Coordinator.UnknownMessageException(messageParts[0]);
+            }
+
+            return true;
+        }
+    }
+
+    private String generateCombinedVotes() {
+        StringBuilder voteText = new StringBuilder("VOTE ");
+
+        synchronized (participantVotes) {
+            for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
+                voteText.append(vote.getKey()).append(" ").append(vote.getValue()).append(" ");
+            }
+        }
+        return voteText.toString();
+    }
+
+
 
     int getPort() {
         return this.listenPort;
