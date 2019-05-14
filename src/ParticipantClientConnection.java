@@ -84,6 +84,10 @@ public class ParticipantClientConnection extends Thread {
         }
     }
 
+    int getParticipantPort() {
+        return this.participant.getPort();
+    }
+
     boolean isConnected() {
         return this.serverConn;
     }

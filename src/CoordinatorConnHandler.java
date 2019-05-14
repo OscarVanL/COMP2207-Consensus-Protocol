@@ -53,6 +53,7 @@ public class CoordinatorConnHandler extends Thread {
                             coordinator.participantJoined(this);
                             break;
                         case "OUTCOME":
+                            System.out.println("Received outcome from: " + participantPort + ": " + messageParts[1]);
                             coordinator.outcomeReceived(messageParts[1]);
                             break;
                         default:
