@@ -5,6 +5,7 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.util.*;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
@@ -40,6 +41,7 @@ public class Participant extends Thread {
     private int votesSharedCount = 0;
     private List<String> voteOptions = new ArrayList<>();
     private String chosenVote; //Randomly chosen vote from this participant
+    private Map<Integer, Long> timeVoteMissing = new HashMap<>(); //Assists in timeout period for missing participant votes
     private final Map<Integer, String> participantVotes = new HashMap<>();
     private List<String> majorityOptions = new ArrayList<>(); //Participant votes with majority of votes (including ties), used during a RESTART round
 
@@ -222,7 +224,7 @@ public class Participant extends Thread {
      * Removes a client connection if the connection is lost
      * @param participantConnection Connection to client (ParticipantServerConnection or ParticipantClientConnection)
      */
-    void connectionLost(Object participantConnection) {
+    private void connectionLost(Object participantConnection) {
         if (participantConnection instanceof ParticipantServerConnection) {
             participantsHigherPort.remove(participantConnection);
         } else if (participantConnection instanceof ParticipantClientConnection) {
@@ -237,10 +239,29 @@ public class Participant extends Thread {
      * Determines whether it's ready to send OUTCOME to the Coordinator, and what this outcome is.
      */
     private void establishWinner() {
+        //If we haven't had votes from every connected participant, we need another round of voting (unless the timeout has elapsed).
+        if (roundNumber > 1 && participantVotes.size() < votesRequired) {
+            //Logs the time the participant's vote was first missing, if it remains missing for the timeout period, we stop expecting to receive it
+            for (Integer participant : otherParticipants) {
+                if (!participantVotes.keySet().contains(participant)) {
+                    if (timeVoteMissing.containsKey(participant)) {
+                        if (System.currentTimeMillis() - timeVoteMissing.get(participant) > (timeout * 0.75)) { //Don't wait for the full timeout period in case we still have established connections to other participants that have been left waiting too.
+                            System.out.println("Vote from Participant " + participant + " has been absent for more than the timeout period. Proceeding without that participant's vote.");
+                            votesRequired--;
+                            timeVoteMissing.remove(participant);
+                        }
+                    } else {
+                        timeVoteMissing.put(participant, System.currentTimeMillis());
+                    }
+                }
+            }
+            revote(revoteReason.INCOMPLETE);
+        }
+
         //Ensures two participant connections don't enter establishWinner() simultaneously and send duplicate votes
         //to the Coordinator
         synchronized (this) {
-            if (participantVotes.size() >= votesRequired && !revoting && !majorityVoteSent && hasSharedVotes && roundNumber > 1) {
+            if (participantVotes.size() >= votesRequired && !revoting && !majorityVoteSent && hasSharedVotes && roundNumber > 1 || participantsConnected == 0) {
                 //If failure condition 2 is set, fail here to ensure step 5 does not complete
                 if (failureCond == failureCondition.AFTER) {
                     System.out.println("INITIATING FAILURE CONDITION 2");
@@ -326,7 +347,7 @@ public class Participant extends Thread {
     /**
      * Called by a connection instance to instigate another vote if a participant connection fails
      */
-    void revote(revoteReason reason) {
+    private void revote(revoteReason reason) {
         if (reason == revoteReason.FAILURE && !failed) {
             if (participantVotes.size() < votesRequired) {
                 System.out.println("Initiating revote (Participant failure before all votes propagated)");
@@ -338,7 +359,7 @@ public class Participant extends Thread {
             // complete. It ensures another round of votes happen to ensure complete sets of votes propagate fully
             revoting = true;
             hasSharedVotes = false;
-            System.out.println("Flagging revote (A participant has incomplete votes)");
+            System.out.println("Initiating revote (Incomplete votes)");
         }
     }
 
@@ -397,15 +418,18 @@ public class Participant extends Thread {
             hasSharedVotes = false;
             majorityOptions.clear();
             participantVotes.clear();
+            timeVoteMissing.clear();
             participantVotes.put(listenPort, chosenVote);
-            votesRequired = participantsConnected; //If we're doing a restart, we can't expect a failed participant's vote to propagate (as we did before).
+            votesRequired = participantsConnected + 1; //If we're doing a restart, we can't expect a failed participant's vote to propagate (as we did before).
             roundNumber = 1;
             System.out.println("Selected random option: " + chosenVote);
         }
     }
 
+
+
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
-    boolean receiveMessage(String receivedMessage, Integer port) throws Coordinator.UnknownMessageException {
+    private boolean receiveMessage(String receivedMessage, Integer port) throws Coordinator.UnknownMessageException {
         if (receivedMessage == null) {
             System.out.println("Connected participant connection closed unexpectedly");
             revote(Participant.revoteReason.FAILURE);
@@ -419,12 +443,6 @@ public class Participant extends Thread {
                         System.out.println("Vote received in round " + roundNumber + ": " + receivedMessage + " from port " + port);
                     } else {
                         System.out.println("Vote received in round " + roundNumber + ": " + receivedMessage);
-                    }
-
-                    //If we receive a vote that doesn't have the vote of every participant, we need another round of voting.
-                    if (roundNumber > 1 && messageParts.length < participantsConnected * 2 + 1) {
-                        System.out.println("Revoting as message had " + ((messageParts.length-1) / 2) + " votes and required: " + (participantsConnected+1));
-                        revote(revoteReason.INCOMPLETE);
                     }
 
                     for (int i=1; i<messageParts.length; i += 2) {
@@ -452,23 +470,21 @@ public class Participant extends Thread {
         return voteText.toString();
     }
 
-
-
-    int getPort() {
+    private int getPort() {
         return this.listenPort;
     }
 
-    int getTimeout() {
+    private int getTimeout() {
         return this.timeout;
     }
 
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
-    boolean isMajorityVoteSent() {
+    private boolean isMajorityVoteSent() {
         return this.majorityVoteSent;
     }
 
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
-    boolean hasFailed() {
+    private boolean hasFailed() {
         return this.failed;
     }
 
@@ -486,6 +502,208 @@ public class Participant extends Thread {
         }
     }
 
+    /**
+     * Handles Participant peer-to-peer connection where the connection is designated 'client'
+     */
+    public class ParticipantClientConnection extends Thread {
+        private Participant participant;
+        private int participantServerPort;
+        private boolean serverConn = false;
+        private volatile boolean running = true;
+
+        private Socket socket;
+        private PrintWriter out;
+        private BufferedReader in;
+
+        ParticipantClientConnection(Participant participant, int participantServerPort) {
+            this.participant = participant;
+            this.participantServerPort = participantServerPort;
+
+            try {
+                socket = new Socket("localhost", participantServerPort);
+                socket.setSoLinger(true,0);
+                out = new PrintWriter(socket.getOutputStream(), true);
+                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                serverConn = true;
+                System.out.println("Client participant " + participant.getPort() + " connected to Server participant: " + participantServerPort);
+            } catch (IOException e) {
+                running = false;
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public void run() {
+            while (running && serverConn) {
+                //Waits for a message from the Server
+                try {
+                    if (!participant.receiveMessage(in.readLine(), participantServerPort)) {
+                        closeConnection();
+                    }
+                } catch (SocketTimeoutException e) {
+                    System.out.println("Connection to other Participant at port " + participantServerPort + " timed out.");
+                    closeConnection();
+                    if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
+                        System.out.println("A connected participant failed before OUTCOME was sent. Revoting.");
+                        participant.revote(Participant.revoteReason.FAILURE);
+                    }
+                } catch (SocketException e) {
+                    System.out.println("Connection to other Participant at port " + participantServerPort + " closed.");
+                    closeConnection();
+                    if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
+                        System.out.println("A connected participant failed before OUTCOME was sent. Revoting.");
+                        participant.revote(Participant.revoteReason.FAILURE);
+                    }
+                } catch (IOException e) {
+                    closeConnection();
+                    running = false;
+                    e.printStackTrace();
+                } catch (Coordinator.UnknownMessageException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+
+        void sendVotes(String vote) {
+            if (serverConn) {
+                System.out.println("Sending to " + participantServerPort + ": VOTE " + participant.getPort() + " " + vote);
+                out.println("VOTE " + participant.getPort() + " " + vote);
+            }
+        }
+
+        void sendCombinedVotes(String votes) {
+            if (serverConn) {
+                System.out.println("Sending to " + participantServerPort + ": "  + votes);
+                out.println(votes);
+            }
+        }
+
+        int getParticipantPort() {
+            return this.participant.getPort();
+        }
+
+        @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+        boolean isConnected() {
+            return this.serverConn;
+        }
+
+        void setTimeout() throws SocketException {
+            this.socket.setSoTimeout(participant.getTimeout());
+        }
+
+        /**
+         * Used to simulate a participant failing
+         */
+        private void closeConnection() {
+            participant.connectionLost(this);
+            serverConn = false;
+            running = false;
+            try {
+                socket.close();
+                in.close();
+                out.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+        }
+    }
+
+    /**
+     * Handles Participant peer-to-peer connection where the connection is designated 'server'
+     */
+    public class ParticipantServerConnection extends Thread {
+        private Socket socket;
+        private Participant participant;
+        private PrintWriter out;
+        private BufferedReader in;
+        private boolean connectionLost = false;
+        private volatile boolean running = true;
+
+        ParticipantServerConnection(Socket socket, Participant participant) {
+            this.socket = socket;
+            this.participant = participant;
+
+            try {
+                this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                this.out = new PrintWriter(socket.getOutputStream(), true);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public void run() {
+            while (running) {
+                try {
+                    if (!participant.receiveMessage(in.readLine(), null)) {
+                        closeConnection();
+                    }
+                } catch (SocketTimeoutException e) {
+                    System.out.println("Connection to other Participant timed out.");
+                    closeConnection();
+                    if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
+                        System.out.println("A connected participant failed before OUTCOME was sent. Triggering revote.");
+                        participant.revote(Participant.revoteReason.FAILURE);
+                    }
+                } catch (SocketException e) {
+                    System.out.println("Connection to other Participant closed");
+                    closeConnection();
+                    if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
+                        System.out.println("A connected participant failed before OUTCOME was sent. Triggering revote.");
+                        participant.revote(Participant.revoteReason.FAILURE);
+                    }
+                } catch (IOException e) {
+                    closeConnection();
+                    e.printStackTrace();
+                } catch (Coordinator.UnknownMessageException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        void sendVotes(String vote) {
+            if (!connectionLost && !participant.isMajorityVoteSent()) {
+                System.out.println("Sending: VOTE " + participant.getPort() + " " + vote);
+                out.println("VOTE " + participant.getPort() + " " + vote);
+            }
+        }
+
+        void sendCombinedVotes(String votes) {
+            if (!connectionLost && !participant.isMajorityVoteSent()) {
+                System.out.println("Sending: " + votes);
+                out.println(votes);
+            }
+        }
+
+        void setTimeout() throws SocketException {
+            if (!connectionLost) {
+                this.socket.setSoTimeout(participant.getTimeout());
+            }
+        }
+
+        /**
+         * Used to simulate a participant failing
+         */
+        private void closeConnection() {
+            participant.connectionLost(this);
+            connectionLost = true;
+            running = false;
+            try {
+                socket.close();
+                in.close();
+                out.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+
+    /**
+     * A Custom Exception which is thrown if a Participant is ran with incorrect arguments
+     */
     static class InsufficientArgumentsException extends Exception {
         String[] args;
 
@@ -498,6 +716,9 @@ public class Participant extends Thread {
         }
     }
 
+    /**
+     * A custom exception which is thrown if a Participant is configured wrong (has same Port as another Participant)
+     */
     static class ParticipantConfigurationException extends Exception {
         String error;
 
