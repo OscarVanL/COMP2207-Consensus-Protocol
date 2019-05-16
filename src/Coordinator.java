@@ -18,9 +18,11 @@ public class Coordinator {
     private List<Integer> participantPorts = new ArrayList<>();
     private int participantsJoined = 0;
 
+    private boolean outcomePrinted = false;
     private ServerSocket serverSocket;
     private int parts; //Number of participants to expect to JOIN (and expect an OUTCOME from)
     private final Set<String> options;
+    private List<Integer> outcomesFrom = new ArrayList<>(); //Stores which Participants we've gotten the outcomes from
     private List<String> outcomes = new ArrayList<>();
 
     private Coordinator(String[] args) throws InsufficientArgumentsException {
@@ -64,8 +66,6 @@ public class Coordinator {
         checkOutcomes();
     }
 
-    private boolean outcomePrinted = false;
-
     private void checkOutcomes() {
         //Wait for outcomes from all connected participants (parts is decremented if a participant connection fails)
         if (outcomes.size() >= parts && !outcomePrinted) {
@@ -82,12 +82,13 @@ public class Coordinator {
                                     .map(CoordinatorConnHandler.class::cast)
                                     .forEach(e -> e.sendMessage("RESTART"));
                         }
+                        outcomesFrom.clear();
                         outcomes.clear();
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
                 } else {
-                    System.out.println("COORD: Participants voted for option " + outcomes.get(0));
+                    System.out.println("COORD: === OVERALL VOTE: " + outcomes.get(0) + " ===");
                     outcomePrinted = true;
                     //Close connections to participants as we have conclusive votes
                     synchronized (participantConnections) {
@@ -95,6 +96,8 @@ public class Coordinator {
                                 .map(CoordinatorConnHandler.class::cast)
                                 .forEach(CoordinatorConnHandler::closeConnection);
                     }
+                    //Closes connection to Participants
+                    closeAllConnections();
                     System.exit(0);
                 }
 
@@ -110,11 +113,19 @@ public class Coordinator {
     private void participantDisconnected(CoordinatorConnHandler connection) {
         participantPorts.remove((Integer) connection.getPort());
         participantsJoined--;
-        parts--;
+        if (!outcomesFrom.contains(connection.getPort())) {
+            parts--;
+        }
         //Don't remove a connection while something else is referencing it
         synchronized (participantConnections) {
             participantConnections.remove(connection);
         }
+        //In the case that ALL participants fail :(
+        if (parts == 0) {
+            System.out.println("All Participants failed with no consensus, no result.");
+            System.exit(1);
+        }
+
         checkOutcomes();
     }
 
@@ -142,6 +153,13 @@ public class Coordinator {
 
         if (participantsJoined >= parts) {
             sendDetailsVoteOptions();
+        }
+    }
+
+    private void closeAllConnections() {
+        for (Thread socket : participantConnections.keySet()) {
+            CoordinatorConnHandler conn = (CoordinatorConnHandler) socket;
+            conn.closeConnection();
         }
     }
 
@@ -199,6 +217,7 @@ public class Coordinator {
                                 break;
                             case "OUTCOME":
                                 System.out.println("COORD: Received outcome from: " + participantPort + ": " + messageParts[1]);
+                                outcomesFrom.add(participantPort);
                                 outcomeReceived(messageParts[1]);
                                 break;
                             default:
@@ -252,6 +271,8 @@ public class Coordinator {
         void closeConnection() {
             try {
                 socket.close();
+                in.close();
+                out.close();
             } catch (IOException e) {
                 e.printStackTrace();
             }

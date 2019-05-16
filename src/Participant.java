@@ -1,11 +1,5 @@
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketException;
-import java.net.SocketTimeoutException;
+import java.io.*;
+import java.net.*;
 import java.util.*;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
@@ -30,6 +24,7 @@ public class Participant extends Thread {
     private final failureCondition failureCond;
     private List<Integer> otherParticipants;
 
+    private boolean printing = true;
     private boolean failed = false;
     private boolean running; //Whether the thread/connection is running as normal
     private int roundNumber = 1;
@@ -92,13 +87,7 @@ public class Participant extends Thread {
                     while (participantsHigherPort.stream()
                             .map(ParticipantClientConnection.class::cast)
                             .anyMatch(e -> !e.isConnected())) {
-                        if (System.currentTimeMillis() - startTime > timeout) {
-                            List<ParticipantClientConnection> notConnected = participantsHigherPort.stream()
-                                    .map(ParticipantClientConnection.class::cast)
-                                    .filter(e -> !e.isConnected())
-                                    .collect(Collectors.toList());
-                            throw new TimeoutException("Other participants did not connect within timeout: " + notConnected.stream().map(e -> String.valueOf(e.getParticipantPort())).collect(Collectors.joining()));
-                        }
+                        ; //Just stay here until they've all connected...
                     }
                     connectionsMade = true;
                     //Enables participant timeouts now that connections have been established
@@ -157,7 +146,7 @@ public class Participant extends Thread {
                 if (!majorityVoteSent) {
                     roundNumber++;
                 }
-            } catch (InterruptedException | TimeoutException | SocketException e) {
+            } catch (InterruptedException | SocketException e) {
                 e.printStackTrace();
             }
         }
@@ -266,19 +255,11 @@ public class Participant extends Thread {
 
                 //Establish winning vote
                 Map<String, Integer> votesCount = new HashMap<>();
-                for (Map.Entry<Integer, String> vote : participantVotes.entrySet()) {
-                    Integer port = vote.getKey();
-                    String option = vote.getValue();
+                for (String vote : participantVotes.values()) {
 
-                    //Only counts votes not made by itself
-                    if (port != listenPort) {
-                        int count = votesCount.getOrDefault(option, 0);
-                        votesCount.put(option, count + 1);
-                    }
+                    int count = votesCount.getOrDefault(vote, 0);
+                    votesCount.put(vote, count + 1);
                 }
-                //Adds its own vote
-                int count = votesCount.getOrDefault(chosenVote, 0);
-                votesCount.put(chosenVote, count + 1);
 
                 int maxVotes = (Collections.max(votesCount.values()));  //Find the maximum vote for any option
                 boolean isMajorityVote = false;
@@ -298,12 +279,14 @@ public class Participant extends Thread {
                         running = false; //We're done now, so no further loops are required.
                         System.out.println(listenPort + ": MAJORITY VOTE FOUND: " + majorityOptions.get(0));
                         out.println("OUTCOME " + majorityOptions.get(0) + " " + participantVotes.keySet());
-                        for (Map.Entry<String, Integer> entry : votesCount.entrySet()) {
-                            System.out.println(listenPort + ": Option: " + entry.getKey() + ", Votes: " + entry.getValue()) ;
-                        }
+
                         //As a majority was found, we can stop now.
-                        sleep(1500);
-                        System.exit(0);
+                        try {
+                            muteOutputs();
+                            in.readLine(); //Blocks here until the coordinator closes the connection, THEN that SocketException triggers the Participant to close :)
+                        } catch (SocketException e) {
+                            System.exit(0);
+                        }
                     } else if (!majorityVoteSent) {
                         majorityVoteSent = true;
                         if (majorityOptions.size() > 1) {
@@ -324,7 +307,7 @@ public class Participant extends Thread {
                         awaitRestart();
                         //We didn't reach a majority, so participant continues to run awaiting further instructions from Coordinator
                     }
-                } catch (IOException | InterruptedException e) {
+                } catch (IOException e) {
                     e.printStackTrace();
                 }
 
@@ -457,6 +440,20 @@ public class Participant extends Thread {
         return voteText.toString();
     }
 
+    /**
+     * Called after participant has sent its majority vote back to the Coordinator and is still running to avoid spammy
+     * disconnect messages in stdout. (This is purely for console/log aesthetics - can be removed)
+     */
+    private void muteOutputs() {
+        System.setOut(new PrintStream(new OutputStream() {
+
+            @Override
+            public void write(int o) {
+
+            }
+        }));
+    }
+
     public static void main(String[] args) {
         try {
             Participant participant = new Participant(args);
@@ -546,11 +543,6 @@ public class Participant extends Thread {
             }
         }
 
-        int getParticipantPort() {
-            return listenPort;
-        }
-
-        @SuppressWarnings("BooleanMethodIsAlwaysInverted")
         boolean isConnected() {
             return this.serverConn;
         }
