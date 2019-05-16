@@ -31,12 +31,11 @@ public class Coordinator {
         int listenPort = Integer.parseInt(args[0]);
         parts = Integer.parseInt(args[1]);
         options = new HashSet<>();
-
         options.addAll(Arrays.asList(args).subList(2, args.length));
 
         try {
             serverSocket = new ServerSocket(listenPort);
-            System.out.println("Initialised Coordinator listening on " + listenPort + ", expecting " + parts + " participants, options: " + options.toString());
+            System.out.println("COORD: Initialised Coordinator listening on " + listenPort + ", expecting " + parts + " participants, options: " + options.toString());
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -47,17 +46,16 @@ public class Coordinator {
         while (participantConnections.size() < parts) {
             socket = serverSocket.accept();
             socket.setSoLinger(true,0);
-            System.out.println("A participant has connected to the coordinator");
+            System.out.println("COORD: A participant has connected to the coordinator");
 
             //Creates a new thread for the participant, so this thread is able to continue to accept new connections.
-            Thread thread = new CoordinatorConnHandler(socket, this);
+            Thread thread = new CoordinatorConnHandler(socket);
             synchronized (participantConnections) {
                 participantConnections.put(thread, socket);
             }
-
             thread.start();
         }
-        System.out.println("All participants have made a connection to the coordinator");
+        System.out.println("COORD: All participants have made a connection to the coordinator");
 
     }
 
@@ -71,11 +69,11 @@ public class Coordinator {
     private void checkOutcomes() {
         //Wait for outcomes from all connected participants (parts is decremented if a participant connection fails)
         if (outcomes.size() >= parts && !outcomePrinted) {
-            System.out.println("Received majority votes from " + outcomes.size() + " participants, out of " + parts + " functional participants.");
+            System.out.println("COORD: Received majority votes from " + outcomes.size() + " participants, out of " + parts + " functional participants.");
             //If all outcomes are the same, that outcome is conclusive.
             if (outcomes.stream().allMatch(outcomes.get(0)::equals)) {
                 if (outcomes.get(0).equals("null")) {
-                    System.out.println("Participants could not decide on a majority or there was a tie.");
+                    System.out.println("COORD: Participants could not decide on a majority or there was a tie.");
                     //Restart voting for connected participants with tie values
                     try {
                         sleep(2000);
@@ -88,10 +86,8 @@ public class Coordinator {
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
-
-
                 } else {
-                    System.out.println("Participants voted for option " + outcomes.get(0));
+                    System.out.println("COORD: Participants voted for option " + outcomes.get(0));
                     outcomePrinted = true;
                     //Close connections to participants as we have conclusive votes
                     synchronized (participantConnections) {
@@ -103,7 +99,7 @@ public class Coordinator {
                 }
 
             } else {
-                System.out.println("Participants did not reach same outcome: " + outcomes.toString());
+                System.out.println("COORD: Participants did not reach same outcome: " + outcomes.toString());
             }
         }
     }
@@ -119,8 +115,6 @@ public class Coordinator {
         synchronized (participantConnections) {
             participantConnections.remove(connection);
         }
-
-
         checkOutcomes();
     }
 
@@ -159,14 +153,13 @@ public class Coordinator {
         } catch (InsufficientArgumentsException e) {
             e.printStackTrace();
         } catch (IOException e) {
-            System.err.println("Unable to connect to participants");
+            System.err.println("COORD: Unable to connect to participants");
             e.printStackTrace();
         }
     }
 
     public class CoordinatorConnHandler extends Thread {
         private final Socket socket;
-        private Coordinator coordinator;
         private BufferedReader in;
         private PrintWriter out;
         private int participantPort;
@@ -175,13 +168,11 @@ public class Coordinator {
         /**
          * A class for managing a Coordinator connection to a participant
          * @param socket Socket for connection to participant
-         * @param coordinator Coordinator
          * @throws IOException Throw exception to Coordinator if socket issue occurs
          */
-        CoordinatorConnHandler(Socket socket, Coordinator coordinator) throws IOException {
+        CoordinatorConnHandler(Socket socket) throws IOException {
             this.socket = socket;
             socket.setSoLinger(true,0);
-            this.coordinator = coordinator;
             this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             this.out = new PrintWriter(socket.getOutputStream(), true);
             this.running = true;
@@ -194,8 +185,8 @@ public class Coordinator {
                 try {
                     receivedMessage = in.readLine();
                     if (receivedMessage == null) {
-                        System.out.println("Connection to participant at port " + participantPort + " closed unexpectedly.");
-                        coordinator.participantDisconnected(this);
+                        System.out.println("COORD: Connection to participant at port " + participantPort + " closed unexpectedly.");
+                        participantDisconnected(this);
                         closeConnection();
                         running = false;
                     } else {
@@ -204,11 +195,11 @@ public class Coordinator {
                             //Participant telling Coordinator its port number/identifier
                             case "JOIN":
                                 participantPort = Integer.parseInt(receivedMessage.replaceAll("[^0-9]", ""));
-                                coordinator.participantJoined(this);
+                                participantJoined(this);
                                 break;
                             case "OUTCOME":
-                                System.out.println("Received outcome from: " + participantPort + ": " + messageParts[1]);
-                                coordinator.outcomeReceived(messageParts[1]);
+                                System.out.println("COORD: Received outcome from: " + participantPort + ": " + messageParts[1]);
+                                outcomeReceived(messageParts[1]);
                                 break;
                             default:
                                 throw new Coordinator.UnknownMessageException(receivedMessage);
@@ -217,12 +208,12 @@ public class Coordinator {
 
                 } catch (SocketTimeoutException e) {
                     this.running = false;
-                    System.out.println("Connection to participant at port " + participantPort + " timed out.");
-                    coordinator.participantDisconnected(this);
+                    System.out.println("COORD: Connection to participant at port " + participantPort + " timed out.");
+                    participantDisconnected(this);
                 } catch (SocketException e) {
                     this.running = false;
-                    System.out.println("Connection to participant at port " + participantPort + " closed.");
-                    coordinator.participantDisconnected(this);
+                    System.out.println("COORD: Connection to participant at port " + participantPort + " closed.");
+                    participantDisconnected(this);
                 } catch (Coordinator.UnknownMessageException e) {
                     e.printStackTrace();
                 } catch (IOException e) {
