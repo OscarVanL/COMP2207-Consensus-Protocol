@@ -40,7 +40,7 @@ public class CoordinatorConnHandler extends Thread {
             try {
                 receivedMessage = in.readLine();
                 if (receivedMessage == null) {
-                    System.err.println("Connection to participant at port " + participantPort + " closed unexpectedly.");
+                    System.out.println("Connection to participant at port " + participantPort + " closed unexpectedly.");
                     coordinator.participantDisconnected(this);
                     closeConnection();
                     running = false;
@@ -63,11 +63,11 @@ public class CoordinatorConnHandler extends Thread {
 
             } catch (SocketTimeoutException e) {
                 this.running = false;
-                System.err.println("Connection to participant at port " + participantPort + " timed out.");
+                System.out.println("Connection to participant at port " + participantPort + " timed out.");
                 coordinator.participantDisconnected(this);
             } catch (SocketException e) {
                 this.running = false;
-                System.err.println("Connection to participant at port " + participantPort + " closed.");
+                System.out.println("Connection to participant at port " + participantPort + " closed.");
                 coordinator.participantDisconnected(this);
             } catch (Coordinator.UnknownMessageException e) {
                 e.printStackTrace();

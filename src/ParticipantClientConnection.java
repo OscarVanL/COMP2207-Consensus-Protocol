@@ -46,14 +46,14 @@ public class ParticipantClientConnection extends Thread {
                     closeConnection();
                 }
             } catch (SocketTimeoutException e) {
-                System.err.println("Connection to other Participant at port " + participantServerPort + " timed out.");
+                System.out.println("Connection to other Participant at port " + participantServerPort + " timed out.");
                 closeConnection();
                 if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
                     System.out.println("A connected participant failed before OUTCOME was sent. Revoting.");
                     participant.revote(Participant.revoteReason.FAILURE);
                 }
             } catch (SocketException e) {
-                System.err.println("Connection to other Participant at port " + participantServerPort + " closed.");
+                System.out.println("Connection to other Participant at port " + participantServerPort + " closed.");
                 closeConnection();
                 if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
                     System.out.println("A connected participant failed before OUTCOME was sent. Revoting.");
@@ -88,6 +88,7 @@ public class ParticipantClientConnection extends Thread {
         return this.participant.getPort();
     }
 
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     boolean isConnected() {
         return this.serverConn;
     }
@@ -99,7 +100,7 @@ public class ParticipantClientConnection extends Thread {
     /**
      * Used to simulate a participant failing
      */
-    void closeConnection() {
+    private void closeConnection() {
         participant.connectionLost(this);
         serverConn = false;
         running = false;

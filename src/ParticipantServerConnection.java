@@ -39,14 +39,14 @@ public class ParticipantServerConnection extends Thread {
                     closeConnection();
                 }
             } catch (SocketTimeoutException e) {
-                System.err.println("Connection to other Participant timed out.");
+                System.out.println("Connection to other Participant timed out.");
                 closeConnection();
                 if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
                     System.out.println("A connected participant failed before OUTCOME was sent. Triggering revote.");
                     participant.revote(Participant.revoteReason.FAILURE);
                 }
             } catch (SocketException e) {
-                System.err.println("Connection to other Participant closed");
+                System.out.println("Connection to other Participant closed");
                 closeConnection();
                 if (!participant.isMajorityVoteSent() && !participant.hasFailed()) {
                     System.out.println("A connected participant failed before OUTCOME was sent. Triggering revote.");
@@ -84,7 +84,7 @@ public class ParticipantServerConnection extends Thread {
     /**
      * Used to simulate a participant failing
      */
-    void closeConnection() {
+    private void closeConnection() {
         participant.connectionLost(this);
         connectionLost = true;
         running = false;

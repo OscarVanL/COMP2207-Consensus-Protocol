@@ -21,7 +21,6 @@ public class Participant extends Thread {
     private List<Thread> participantsHigherPort = new ArrayList<>(); //Stores each connection to a participant on a higher port (ParticipantClientConnection)
     private HashMap<Thread, Socket> participantsLowerPort = new HashMap<>(); //Stores each connection to a participant on a lower port (ParticipantServerConnection)
     private boolean connectionsMade = false;
-    private Socket socket;
     private PrintWriter out;
     private BufferedReader in;
 
@@ -70,7 +69,7 @@ public class Participant extends Thread {
 
 
         try {
-            socket = new Socket("localhost", coordinatorPort);
+            Socket socket = new Socket("localhost", coordinatorPort);
             socket.setSoLinger(true,0);
             out = new PrintWriter(socket.getOutputStream(), true);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
@@ -215,23 +214,7 @@ public class Participant extends Thread {
     private void closeConnections() {
         running = false;
         failed = true;
-        try {
-            for (Thread thread : participantsLowerPort.keySet()) {
-                ParticipantServerConnection conn = (ParticipantServerConnection) thread;
-                conn.closeConnection();
-            }
-
-            for (Thread thread : participantsHigherPort) {
-                ParticipantClientConnection conn = (ParticipantClientConnection) thread;
-                conn.closeConnection();
-            }
-
-            socket.close();
-            in.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
+        //We don't need to close each of the threads from this Participant as System.exit() closes the JVM, which in turn closes those threads too.
         System.exit(1);
     }
 
@@ -305,6 +288,9 @@ public class Participant extends Thread {
                         running = false; //We're done now, so no further loops are required.
                         System.out.println("MAJORITY VOTE FOUND: " + majorityOptions.get(0));
                         out.println("OUTCOME " + majorityOptions.get(0) + " " + participantVotes.keySet());
+                        for (Map.Entry<String, Integer> entry : votesCount.entrySet()) {
+                            System.out.println("Option: " + entry.getKey() + ", Votes: " + entry.getValue()) ;
+                        }
                         //As a majority was found, we can stop now.
                         sleep(1500);
                         System.exit(0);
@@ -317,6 +303,9 @@ public class Participant extends Thread {
                             }
                         } else {
                             System.out.println("NO OVERALL MAJORITY AMONG OPTIONS: " + votesCount.keySet().toString());
+                            for (Map.Entry<String, Integer> entry : votesCount.entrySet()) {
+                                System.out.println("Option: " + entry.getKey() + ", Votes: " + entry.getValue()) ;
+                            }
                             //RESTART will use any options voted for in this round
                             majorityOptions.clear();
                             majorityOptions.addAll(votesCount.keySet());
@@ -418,7 +407,7 @@ public class Participant extends Thread {
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     boolean receiveMessage(String receivedMessage, Integer port) throws Coordinator.UnknownMessageException {
         if (receivedMessage == null) {
-            System.err.println("Connected participant connection closed unexpectedly");
+            System.out.println("Connected participant connection closed unexpectedly");
             revote(Participant.revoteReason.FAILURE);
             return false;
         } else {
