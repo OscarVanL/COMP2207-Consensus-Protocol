@@ -24,7 +24,6 @@ public class Participant extends Thread {
     private final failureCondition failureCond;
     private List<Integer> otherParticipants;
 
-    private boolean printing = true;
     private boolean failed = false;
     private boolean running; //Whether the thread/connection is running as normal
     private int roundNumber = 1;
@@ -89,6 +88,7 @@ public class Participant extends Thread {
                             .anyMatch(e -> !e.isConnected())) {
                         ; //Just stay here until they've all connected...
                     }
+                    System.out.println(listenPort + ": ALL PEER-TO-PEER CONNECTIONS ESTABLISHED");
                     connectionsMade = true;
                     //Enables participant timeouts now that connections have been established
                     enableTimeouts();
@@ -103,7 +103,7 @@ public class Participant extends Thread {
                         votesSharedCount++;
                         //Simulates failure condition 1 (Failing during step 4 after sharing its vote with some but not all other participants)
                         if (votesSharedCount >= 1 && failureCond == failureCondition.DURING) {
-                            System.out.println(listenPort + ":INITIATING FAILURE CONDITION 1");
+                            System.out.println(listenPort + ": INITIATING FAILURE CONDITION 1");
                             System.exit(1);
                         }
                     }
@@ -156,7 +156,6 @@ public class Participant extends Thread {
         try {
             //Opens ServerSocket used to communicate with participants on lower port numbers
             ServerSocket serverSocket = new ServerSocket(listenPort);
-
             for (int participant : otherParticipants) {
                 //If the participant we're connecting to is at a higher port number, that participant acts as a server.
                 //If the participant we're connecting to is at a lower port, this participant is the server.
@@ -165,19 +164,35 @@ public class Participant extends Thread {
                     participantsHigherPort.add(thread);
                     thread.start();
                 } else if (participant < listenPort) {
-                    Socket socket = serverSocket.accept();
-                    socket.setSoLinger(true,0);
-                    System.out.println(listenPort + ": Another participant connected to this participant acting as server " + listenPort);
-                    Thread thread = new ParticipantServerConnection(socket);
-                    participantsLowerPort.put(thread, socket);
-                    thread.start();
+                    while (true) {
+                        try {
+                            Socket socket = serverSocket.accept();
+                            socket.setSoLinger(true,0);
+                            socket.setSoTimeout(timeout);
+                            System.out.println(listenPort + ": Another participant connected to this participant acting as server.");
+                            Thread thread = new ParticipantServerConnection(socket);
+                            participantsLowerPort.put(thread, socket);
+                            thread.start();
+                            break;
+                        } catch (SocketTimeoutException e) {
+                            try {
+                                System.out.println("Failed to connect ServerSocket to Participant within timeout, trying again.");
+                                Thread.sleep(250);
+                            } catch (InterruptedException ex) {
+                                ex.printStackTrace();
+                            }
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                        }
+                    }
+
                 } else {
                     throw new ParticipantConfigurationException(listenPort + ": Participant has same port as another participant: " + participant);
                 }
                 participantsConnected = participantsHigherPort.size() + participantsLowerPort.size();
                 votesRequired = participantsConnected + 1;
             }
-        } catch (IOException | ParticipantConfigurationException e) {
+        } catch (ParticipantConfigurationException | IOException e) {
             e.printStackTrace();
         }
     }
@@ -282,7 +297,6 @@ public class Participant extends Thread {
 
                         //As a majority was found, we can stop now.
                         try {
-                            muteOutputs();
                             in.readLine(); //Blocks here until the coordinator closes the connection, THEN that SocketException triggers the Participant to close :)
                         } catch (SocketException e) {
                             System.exit(0);
@@ -440,20 +454,6 @@ public class Participant extends Thread {
         return voteText.toString();
     }
 
-    /**
-     * Called after participant has sent its majority vote back to the Coordinator and is still running to avoid spammy
-     * disconnect messages in stdout. (This is purely for console/log aesthetics - can be removed)
-     */
-    private void muteOutputs() {
-        System.setOut(new PrintStream(new OutputStream() {
-
-            @Override
-            public void write(int o) {
-
-            }
-        }));
-    }
-
     public static void main(String[] args) {
         try {
             Participant participant = new Participant(args);
@@ -473,7 +473,7 @@ public class Participant extends Thread {
      */
     public class ParticipantClientConnection extends Thread {
         private int participantServerPort;
-        private boolean serverConn = false;
+        private boolean serverConn;
         private volatile boolean running = true;
 
         private Socket socket;
@@ -483,17 +483,31 @@ public class Participant extends Thread {
         ParticipantClientConnection(int participantServerPort) {
             this.participantServerPort = participantServerPort;
 
-            try {
-                socket = new Socket("localhost", participantServerPort);
-                socket.setSoLinger(true,0);
-                out = new PrintWriter(socket.getOutputStream(), true);
-                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                serverConn = true;
-                System.out.println(listenPort + ": Client participant " + listenPort + " connected to Server participant: " + participantServerPort);
-            } catch (IOException e) {
-                running = false;
-                e.printStackTrace();
+            //This is inside while true in case the connection does not establish to allow retrying.
+            while (true) {
+                try {
+                    socket = new Socket("localhost", participantServerPort);
+                    socket.setSoLinger(true,0);
+                    socket.setSoTimeout(timeout);
+                    out = new PrintWriter(socket.getOutputStream(), true);
+                    in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                    serverConn = true;
+                    System.out.println(listenPort + ": Client participant " + listenPort + " connected to Server participant: " + participantServerPort);
+                    break;
+                } catch (SocketTimeoutException e) {
+                    try {
+                        System.out.println("Failed to connect Socket to Server Participant within timeout, trying again.");
+                        Thread.sleep(250);
+                    } catch (InterruptedException ex) {
+                        ex.printStackTrace();
+                    }
+                    e.printStackTrace();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
+
+
         }
 
         @Override
