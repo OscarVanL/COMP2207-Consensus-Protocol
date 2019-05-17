@@ -11,7 +11,7 @@ import java.util.stream.Collectors;
 public class Participant extends Thread {
 
     enum failureCondition { SUCCESS, DURING, AFTER }
-    enum revoteReason { FAILURE, INCOMPLETE }
+    enum revoteReason { FAILURE, INCOMPLETE, PROPAGATE }
 
     private List<Thread> participantsHigherPort = new ArrayList<>(); //Stores each connection to a participant on a higher port (ParticipantClientConnection)
     private List<Thread> participantsLowerPort = new ArrayList<>(); //Stores each connection to a participant on a lower port (ParticipantServerConnection)
@@ -343,6 +343,12 @@ public class Participant extends Thread {
             revoting = true;
             hasSharedVotes = false;
             System.out.println(listenPort + ": Initiating revote (Incomplete votes)");
+        } else if (reason == revoteReason.PROPAGATE && !failed) {
+            //This is to handle the scenario where a vote is received from a participant that had not yet voted.
+            //Simply flags/ensures another round happens to allow the vote to propagate. Without this some rare edge cases meant
+            //votes didn't propagate properly sometimes.
+            revoting = true;
+            hasSharedVotes = false;
         }
     }
 
@@ -427,6 +433,11 @@ public class Participant extends Thread {
                     }
 
                     for (int i=1; i<messageParts.length; i += 2) {
+                        //If we didn't previously have any votes from this participant, we need to set flag to ensure another round
+                        //of votes occurs, to ensure the vote propagates.
+                        if (!participantVotes.containsKey(Integer.parseInt(messageParts[i]))) {
+                            revote(revoteReason.PROPAGATE);
+                        }
                         participantVotes.put(Integer.parseInt(messageParts[i]), messageParts[i + 1]);
                     }
                 }
