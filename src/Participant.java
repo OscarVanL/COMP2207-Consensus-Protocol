@@ -152,10 +152,15 @@ public class Participant extends Thread {
         }
     }
 
+    ServerSocket serverSocket;
+
     private void awaitConnections() {
         try {
             //Opens ServerSocket used to communicate with participants on lower port numbers
-            ServerSocket serverSocket = new ServerSocket(listenPort);
+            if (serverSocket == null) {
+                serverSocket = new ServerSocket(listenPort);
+            }
+
             for (int participant : otherParticipants) {
                 //If the participant we're connecting to is at a higher port number, that participant acts as a server.
                 //If the participant we're connecting to is at a lower port, this participant is the server.
