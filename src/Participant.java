@@ -492,6 +492,9 @@ public class Participant extends Thread {
                     System.out.println(listenPort + ": Client participant " + listenPort + " connected to Server participant: " + participantServerPort);
                     break;
                 } catch (SocketTimeoutException e) {
+                    if (majorityVoteSent) {
+                        System.exit(0);
+                    }
                     try {
                         System.out.println("Failed to connect Socket to Server Participant within timeout, trying again.");
                         Thread.sleep(250);
@@ -500,6 +503,9 @@ public class Participant extends Thread {
                     }
                     e.printStackTrace();
                 } catch (IOException e) {
+                    if (majorityVoteSent) {
+                        System.exit(0);
+                    }
                     e.printStackTrace();
                 }
             }
